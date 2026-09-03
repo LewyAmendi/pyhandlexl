@@ -135,3 +135,118 @@ class TestReadWriteRoundTrip:
     def test_read_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             Table.read(tmp_path / "nope.xlsx")
+
+
+class TestSetValues:
+    def test_set_by_label(self, sample):
+        sample.set("Revenue", "North", 120)
+        assert sample.at("Revenue", "North") == 120
+
+    def test_set_unknown_label_raises(self, sample):
+        with pytest.raises(KeyError):
+            sample.set("Profit", "North", 1)
+
+    def test_set_cell_data(self, sample):
+        sample.set_cell("B2", value=999)
+        assert sample.at("Revenue", "North") == 999
+
+    def test_set_cell_header_label_corner(self, sample):
+        sample.set_cell(row=1, column=2, value="N")
+        sample.set_cell(row=2, column=1, value="Rev")
+        sample.set_cell(row=1, column=1, value="M")
+        assert sample.column_headers == ["N", "South", "East"]
+        assert sample.row_labels == ["Rev", "Costs"]
+        assert sample.corner == "M"
+
+    def test_set_cell_out_of_range_raises(self, sample):
+        with pytest.raises(IndexError):
+            sample.set_cell(row=50, column=1, value=1)
+
+    def test_corner_is_settable(self, sample):
+        sample.corner = "Quarter"
+        assert sample.corner == "Quarter"
+
+
+class TestReplaceLine:
+    def test_set_row(self, sample):
+        sample.set_row("Revenue", [1, 2, 3])
+        assert sample.row("Revenue") == [1, 2, 3]
+
+    def test_set_row_wrong_length_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.set_row("Revenue", [1, 2])
+
+    def test_set_column(self, sample):
+        sample.set_column("North", ["x", "y"])
+        assert sample.column("North") == ["x", "y"]
+
+    def test_set_column_wrong_length_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.set_column("North", ["x"])
+
+
+class TestAdd:
+    def test_add_row(self, sample):
+        sample.add_row("Profit", [60, 140, 95])
+        assert sample.row_labels == ["Revenue", "Costs", "Profit"]
+        assert sample.row("Profit") == [60, 140, 95]
+        assert len(sample) == 3
+
+    def test_add_row_wrong_length_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.add_row("Profit", [1, 2])
+
+    def test_add_column(self, sample):
+        sample.add_column("West", [10, 20])
+        assert sample.column_headers == ["North", "South", "East", "West"]
+        assert sample.column("West") == [10, 20]
+        assert sample.row("Revenue") == ["100", "200", "150", 10]
+
+    def test_add_column_wrong_length_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.add_column("West", [10])
+
+    def test_build_table_from_empty(self):
+        t = Table(data=[], column_headers=["a", "b"])
+        t.add_row("x", [1, 2])
+        t.add_row("y", [3, 4])
+        assert t.data == [[1, 2], [3, 4]]
+        assert t.row_labels == ["x", "y"]
+
+
+class TestRemoveAndRename:
+    def test_drop_row(self, sample):
+        sample.drop_row("Revenue")
+        assert sample.row_labels == ["Costs"]
+        assert sample.data == [["40", "60", "55"]]
+
+    def test_drop_column(self, sample):
+        sample.drop_column("South")
+        assert sample.column_headers == ["North", "East"]
+        assert sample.row("Revenue") == ["100", "150"]
+
+    def test_drop_unknown_raises(self, sample):
+        with pytest.raises(KeyError):
+            sample.drop_row("Profit")
+
+    def test_rename_row_and_column(self, sample):
+        sample.rename_row("Revenue", "Sales")
+        sample.rename_column("North", "N")
+        assert sample.at("Sales", "N") == "100"
+
+    def test_rename_unknown_raises(self, sample):
+        with pytest.raises(KeyError):
+            sample.rename_column("West", "W")
+
+
+class TestMutationKeepsInvariants:
+    def test_edits_survive_a_round_trip(self, tmp_path, sample):
+        # strings only, so the round trip is exact (read_sheet coerces to str)
+        sample.set("Revenue", "North", "111")
+        sample.add_row("Profit", ["1", "2", "3"])
+        sample.drop_column("South")
+        sample.rename_row("Costs", "Expenses")
+
+        path = tmp_path / "edited.xlsx"
+        sample.write(path)
+        assert Table.read(path) == sample
