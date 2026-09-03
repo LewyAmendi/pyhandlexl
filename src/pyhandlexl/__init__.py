@@ -1,6 +1,15 @@
 """pyhandlexl — read and write raw cell values in Excel .xlsx files."""
 
-from pyhandlexl.core import append_rows, read_sheet, write_sheet
+from pyhandlexl.core import (
+    append_rows,
+    create_sheet,
+    delete_sheet,
+    list_sheets,
+    read_sheet,
+    rename_sheet,
+    sheet_exists,
+    write_sheet,
+)
 from pyhandlexl.errors import (
     DimensionError,
     FileLockedError,
@@ -25,7 +34,12 @@ __all__ = [
     "append_rows",
     "check_dimensions",
     "check_sheet_name",
+    "create_sheet",
+    "delete_sheet",
     "is_valid_xlsx",
+    "list_sheets",
     "read_sheet",
+    "rename_sheet",
+    "sheet_exists",
     "write_sheet",
 ]

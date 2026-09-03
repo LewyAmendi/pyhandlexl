@@ -5,8 +5,17 @@ from __future__ import annotations
 import pytest
 from openpyxl import Workbook, load_workbook
 
-from pyhandlexl.core import append_rows, read_sheet, write_sheet
-from pyhandlexl.errors import SheetNotFoundError
+from pyhandlexl.core import (
+    append_rows,
+    create_sheet,
+    delete_sheet,
+    list_sheets,
+    read_sheet,
+    rename_sheet,
+    sheet_exists,
+    write_sheet,
+)
+from pyhandlexl.errors import SheetNameError, SheetNotFoundError
 
 
 class TestWriteThenRead:
@@ -105,3 +114,92 @@ class TestDimensionGuard:
         path = tmp_path / "book.xlsx"
         with pytest.raises(DimensionError):
             write_sheet(path, [[""] * 16_385])
+
+
+class TestSheetManagement:
+    def test_list_sheets(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        wb = Workbook()
+        wb.active.title = "One"
+        wb.create_sheet("Two")
+        wb.save(path)
+        assert list_sheets(path) == ["One", "Two"]
+
+    def test_list_sheets_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            list_sheets(tmp_path / "nope.xlsx")
+
+    def test_sheet_exists(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        write_sheet(path, [["a"]], sheet="Data")
+        assert sheet_exists(path, "Data") is True
+        assert sheet_exists(path, "Missing") is False
+
+    def test_create_sheet_on_new_file(self, tmp_path):
+        path = tmp_path / "fresh.xlsx"
+        create_sheet(path, "Sales")
+        assert list_sheets(path) == ["Sales"]
+
+    def test_create_sheet_appends_to_existing(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        write_sheet(path, [["a"]])  # default sheet "Sheet"
+        create_sheet(path, "Extra")
+        assert list_sheets(path) == ["Sheet", "Extra"]
+
+    def test_create_sheet_duplicate_raises(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        write_sheet(path, [["a"]], sheet="Data")
+        with pytest.raises(ValueError):
+            create_sheet(path, "Data")
+
+    def test_create_sheet_invalid_name_raises(self, tmp_path):
+        with pytest.raises(SheetNameError):
+            create_sheet(tmp_path / "book.xlsx", "bad/name")
+
+    def test_delete_sheet(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        wb = Workbook()
+        wb.create_sheet("Gone")
+        wb.save(path)
+        delete_sheet(path, "Gone")
+        assert sheet_exists(path, "Gone") is False
+
+    def test_delete_missing_sheet_raises(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        write_sheet(path, [["a"]])
+        with pytest.raises(SheetNotFoundError):
+            delete_sheet(path, "Ghost")
+
+    def test_delete_last_sheet_raises(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        write_sheet(path, [["a"]])
+        with pytest.raises(ValueError):
+            delete_sheet(path, list_sheets(path)[0])
+
+    def test_rename_sheet(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        write_sheet(path, [["a"]], sheet="Old")
+        rename_sheet(path, "Old", "New")
+        assert list_sheets(path) == ["New"]
+        assert read_sheet(path, "New") == [["a"]]
+
+    def test_rename_missing_sheet_raises(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        write_sheet(path, [["a"]])
+        with pytest.raises(SheetNotFoundError):
+            rename_sheet(path, "Nope", "New")
+
+    def test_rename_to_existing_name_raises(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        wb = Workbook()
+        wb.active.title = "A"
+        wb.create_sheet("B")
+        wb.save(path)
+        with pytest.raises(ValueError):
+            rename_sheet(path, "A", "B")
+
+    def test_rename_invalid_name_raises(self, tmp_path):
+        path = tmp_path / "book.xlsx"
+        write_sheet(path, [["a"]], sheet="Old")
+        with pytest.raises(SheetNameError):
+            rename_sheet(path, "Old", "x" * 32)

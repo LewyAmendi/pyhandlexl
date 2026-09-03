@@ -165,3 +165,86 @@ def append_rows(
         atomic_save(workbook, path)
     finally:
         workbook.close()
+
+
+def list_sheets(path: str | Path) -> list[str]:
+    """Return the worksheet names in *path*, in order.
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        InvalidFileError: the file is not a readable .xlsx.
+    """
+    workbook = safe_load(path)
+    try:
+        return list(workbook.sheetnames)
+    finally:
+        workbook.close()
+
+
+def sheet_exists(path: str | Path, name: str) -> bool:
+    """Return whether *path* contains a worksheet called *name*."""
+    return name in list_sheets(path)
+
+
+def create_sheet(path: str | Path, name: str) -> None:
+    """Add an empty worksheet called *name*, creating the file if needed.
+
+    Raises:
+        SheetNameError: *name* is not a valid worksheet name.
+        ValueError: a worksheet called *name* already exists.
+    """
+    check_sheet_name(name)
+    file_existed = Path(path).is_file()
+    workbook = load_or_create(path)
+    try:
+        if name in workbook.sheetnames:
+            raise ValueError(f"sheet {name!r} already exists")
+        if file_existed:
+            workbook.create_sheet(title=name)
+        else:
+            workbook.active.title = name
+        atomic_save(workbook, path)
+    finally:
+        workbook.close()
+
+
+def delete_sheet(path: str | Path, name: str) -> None:
+    """Remove the worksheet called *name*.
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        SheetNotFoundError: no worksheet called *name*.
+        ValueError: *name* is the only worksheet (a workbook needs at least one).
+    """
+    workbook = safe_load(path)
+    try:
+        if name not in workbook.sheetnames:
+            raise SheetNotFoundError(name)
+        if len(workbook.sheetnames) == 1:
+            raise ValueError("cannot delete the only sheet in the workbook")
+        del workbook[name]
+        atomic_save(workbook, path)
+    finally:
+        workbook.close()
+
+
+def rename_sheet(path: str | Path, old: str, new: str) -> None:
+    """Rename worksheet *old* to *new*.
+
+    Raises:
+        SheetNameError: *new* is not a valid worksheet name.
+        FileNotFoundError: no file at *path*.
+        SheetNotFoundError: no worksheet called *old*.
+        ValueError: a different worksheet called *new* already exists.
+    """
+    check_sheet_name(new)
+    workbook = safe_load(path)
+    try:
+        if old not in workbook.sheetnames:
+            raise SheetNotFoundError(old)
+        if new != old and new in workbook.sheetnames:
+            raise ValueError(f"sheet {new!r} already exists")
+        workbook[old].title = new
+        atomic_save(workbook, path)
+    finally:
+        workbook.close()
