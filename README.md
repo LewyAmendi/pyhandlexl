@@ -1,5 +1,7 @@
 # pyhandlexl
 
+[![CI](https://github.com/LewyAmendi/pyhandlexl/actions/workflows/ci.yml/badge.svg)](https://github.com/LewyAmendi/pyhandlexl/actions/workflows/ci.yml)
+
 Read and write raw cell values in Excel `.xlsx` files — safely and simply.
 
 > **Status:** early development (0.1.0). API is not yet stable.
