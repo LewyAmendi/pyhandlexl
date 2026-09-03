@@ -8,6 +8,7 @@ from pyhandlexl.errors import (
     SheetNameError,
     SheetNotFoundError,
 )
+from pyhandlexl.validate import check_dimensions, check_sheet_name, is_valid_xlsx
 
 __version__ = "0.1.0"
 
@@ -18,4 +19,7 @@ __all__ = [
     "PyhandlexlError",
     "SheetNameError",
     "SheetNotFoundError",
+    "check_dimensions",
+    "check_sheet_name",
+    "is_valid_xlsx",
 ]
