@@ -19,7 +19,8 @@ from pyhandlexl.core import read_sheet, write_sheet
 class Table:
     """A labeled table backed by a worksheet.
 
-    Construct directly from parts, or with :meth:`read` from a file.
+    Construct directly from parts, or with :meth:`read` from a file. Mutation
+    methods edit the table in place and return ``None``.
     """
 
     def __init__(
@@ -33,7 +34,9 @@ class Table:
         self._column_headers: list[object] = list(column_headers)
         self._row_labels: list[object] = list(row_labels)
         self._corner: object = corner
+        self._validate()
 
+    def _validate(self) -> None:
         if self._row_labels and len(self._row_labels) != len(self._data):
             raise ValueError(f"{len(self._data)} data rows but {len(self._row_labels)} row labels")
         if self._column_headers:
@@ -84,6 +87,10 @@ class Table:
         """The value of cell A1."""
         return self._corner
 
+    @corner.setter
+    def corner(self, value: object) -> None:
+        self._corner = value
+
     @property
     def column_headers(self) -> list[object]:
         """The column headers (row 1, from B1)."""
@@ -128,17 +135,50 @@ class Table:
 
     # ----------------------------------------------------- positional access
 
+    def _width(self) -> int:
+        if self._column_headers:
+            return len(self._column_headers)
+        return len(self._data[0]) if self._data else 0
+
     def _dimensions(self) -> tuple[int, int, int, int]:
         row_start = 1 if self._column_headers else 0
         col_start = 1 if self._row_labels else 0
         n_rows = row_start + len(self._data)
-        width = (
-            len(self._column_headers)
-            if self._column_headers
-            else max((len(row) for row in self._data), default=0)
-        )
-        n_cols = col_start + width
+        n_cols = col_start + self._width()
         return row_start, col_start, n_rows, n_cols
+
+    def _resolve(
+        self, ref: str | None, row: int | None, column: int | str | None
+    ) -> tuple[int, int]:
+        """Turn a ref like ``"B2"`` or a ``row``/``column`` pair into a 1-based (row, col)."""
+        if ref is not None:
+            if row is not None or column is not None:
+                raise TypeError("give either ref or row=/column=, not both")
+            return coordinate_to_tuple(ref)
+        if row is None or column is None:
+            raise TypeError("give a ref like 'B2', or both row= and column=")
+        col_num = column_index_from_string(column) if isinstance(column, str) else column
+        return row, col_num
+
+    def _classify(self, row: int, col_num: int) -> tuple[str, int, int]:
+        """Return ``(kind, i, j)`` where *kind* is corner/header/label/data.
+
+        *i* and *j* are indices into the relevant list (``_data`` is indexed
+        by both).
+        """
+        row_start, col_start, n_rows, n_cols = self._dimensions()
+        if not (1 <= row <= n_rows and 1 <= col_num <= n_cols):
+            raise IndexError(f"cell ({row}, {col_num}) is outside the {n_rows}x{n_cols} table")
+
+        in_header_row = bool(self._column_headers) and row == 1
+        in_label_column = bool(self._row_labels) and col_num == 1
+        if in_header_row and in_label_column:
+            return "corner", 0, 0
+        if in_header_row:
+            return "header", 0, col_num - 1 - col_start
+        if in_label_column:
+            return "label", row - 1 - row_start, 0
+        return "data", row - 1 - row_start, col_num - 1 - col_start
 
     def cell(
         self,
@@ -154,28 +194,107 @@ class Table:
         row and column 1 is the label column, so ``cell(row=2, column=2)`` is
         the first data cell.
         """
-        if ref is not None:
-            if row is not None or column is not None:
-                raise TypeError("give either ref or row=/column=, not both")
-            row, col_num = coordinate_to_tuple(ref)
-        else:
-            if row is None or column is None:
-                raise TypeError("give a ref like 'B2', or both row= and column=")
-            col_num = column_index_from_string(column) if isinstance(column, str) else column
-
-        row_start, col_start, n_rows, n_cols = self._dimensions()
-        if not (1 <= row <= n_rows and 1 <= col_num <= n_cols):
-            raise IndexError(f"cell ({row}, {col_num}) is outside the {n_rows}x{n_cols} table")
-
-        in_header_row = bool(self._column_headers) and row == 1
-        in_label_column = bool(self._row_labels) and col_num == 1
-        if in_header_row and in_label_column:
+        r, c = self._resolve(ref, row, column)
+        kind, i, j = self._classify(r, c)
+        if kind == "corner":
             return self._corner
-        if in_header_row:
-            return self._column_headers[col_num - 1 - col_start]
-        if in_label_column:
-            return self._row_labels[row - 1 - row_start]
-        return self._data[row - 1 - row_start][col_num - 1 - col_start]
+        if kind == "header":
+            return self._column_headers[j]
+        if kind == "label":
+            return self._row_labels[i]
+        return self._data[i][j]
+
+    # -------------------------------------------------------------- mutation
+
+    def set(self, row_label: object, column_header: object, value: object) -> None:
+        """Set the single data value at *row_label* / *column_header*."""
+        i = self._row_index(row_label)
+        j = self._column_index(column_header)
+        self._data[i][j] = value
+
+    def set_cell(
+        self,
+        ref: str | None = None,
+        *,
+        row: int | None = None,
+        column: int | str | None = None,
+        value: object,
+    ) -> None:
+        """Set a value by Excel coordinate.
+
+        A cell in row 1 sets a column header; row 1 / column 1 sets the corner;
+        column 1 sets a row label; anything else sets data.
+        """
+        r, c = self._resolve(ref, row, column)
+        kind, i, j = self._classify(r, c)
+        if kind == "corner":
+            self._corner = value
+        elif kind == "header":
+            self._column_headers[j] = value
+        elif kind == "label":
+            self._row_labels[i] = value
+        else:
+            self._data[i][j] = value
+
+    def set_row(self, row_label: object, values: Iterable[object]) -> None:
+        """Replace the data row for *row_label*; ``len(values)`` must match the column count."""
+        new_row = list(values)
+        i = self._row_index(row_label)
+        expected = self._width()
+        if len(new_row) != expected:
+            raise ValueError(f"expected {expected} values, got {len(new_row)}")
+        self._data[i] = new_row
+
+    def set_column(self, column_header: object, values: Iterable[object]) -> None:
+        """Replace the data column for *column_header*; ``len(values)`` must match the row count."""
+        new_col = list(values)
+        j = self._column_index(column_header)
+        if len(new_col) != len(self._data):
+            raise ValueError(f"expected {len(self._data)} values, got {len(new_col)}")
+        for data_row, value in zip(self._data, new_col, strict=True):
+            data_row[j] = value
+
+    def add_row(self, label: object, values: Iterable[object]) -> None:
+        """Append a labeled data row; ``len(values)`` must match the column count."""
+        new_row = list(values)
+        if self._data and not self._row_labels:
+            raise ValueError("this table has no row labels; use the raw layer to add rows")
+        if (self._data or self._column_headers) and len(new_row) != self._width():
+            raise ValueError(f"expected {self._width()} values, got {len(new_row)}")
+        self._data.append(new_row)
+        self._row_labels.append(label)
+
+    def add_column(self, header: object, values: Iterable[object]) -> None:
+        """Append a labeled data column; ``len(values)`` must match the row count."""
+        new_col = list(values)
+        if any(self._data) and not self._column_headers:
+            raise ValueError("this table has no column headers; use the raw layer to add columns")
+        if len(new_col) != len(self._data):
+            raise ValueError(f"expected {len(self._data)} values, got {len(new_col)}")
+        for data_row, value in zip(self._data, new_col, strict=True):
+            data_row.append(value)
+        self._column_headers.append(header)
+
+    def drop_row(self, label: object) -> None:
+        """Remove the row labeled *label*."""
+        i = self._row_index(label)
+        del self._data[i]
+        del self._row_labels[i]
+
+    def drop_column(self, header: object) -> None:
+        """Remove the column headed *header*."""
+        j = self._column_index(header)
+        del self._column_headers[j]
+        for data_row in self._data:
+            del data_row[j]
+
+    def rename_row(self, old: object, new: object) -> None:
+        """Change a row label."""
+        self._row_labels[self._row_index(old)] = new
+
+    def rename_column(self, old: object, new: object) -> None:
+        """Change a column header."""
+        self._column_headers[self._column_index(old)] = new
 
     # ----------------------------------------------------------------- write
 
