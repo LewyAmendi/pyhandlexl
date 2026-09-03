@@ -1,0 +1,24 @@
+# Virtual environment
+.venv/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# Editors
+.idea/
+.vscode/
+
+# OS junk
+Thumbs.db
+.DS_Store
+
+# Test scratch files (xlsx we generate during tests)
+*.tmp.xlsx
