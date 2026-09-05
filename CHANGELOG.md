@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-09-05
+
 ### Added
 - Published to PyPI: `pip install pyhandlexl`.
+
+### Changed
+- README rewritten; install instructions now point at PyPI.
 
 ## [0.2.0] — 2026-09-05
 
@@ -64,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/LewyAmendi/pyhandlexl/releases/tag/v0.1.0
