@@ -3,34 +3,32 @@
 [![CI](https://github.com/LewyAmendi/pyhandlexl/actions/workflows/ci.yml/badge.svg)](https://github.com/LewyAmendi/pyhandlexl/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/pyhandlexl)](https://pypi.org/project/pyhandlexl/)
 
-**Make an Excel file the database for your next project.**
+**Use an Excel file as a lightweight database for a small project.**
 
-Spreadsheets are the most portable data store there is — every machine opens
-one, anyone can read or edit it without a query language, it versions as a
-single file, and there is no server to run. The catch is working with one from
-code: reach for a raw library and you are back to juggling cell coordinates,
-counting columns, and walking rows by index.
+For internal tools, prototypes, and anything where people need to read or edit
+the data themselves, a spreadsheet is often enough — portable, familiar, no
+server to run. The friction is in the code: [openpyxl](https://openpyxl.readthedocs.io/)
+gives you full control of the workbook, which means working in worksheets, cell
+coordinates, ranges, and dimensions.
 
-`pyhandlexl` hands you the spreadsheet as an **organised table** instead. Row 1
-is your column headers, column A is your row labels, and you read and write data
-*by name*:
+`pyhandlexl` is a simpler layer over openpyxl for the common case — read
+organised data from a sheet, change it, write it back. It treats a worksheet as
+a structured table, so your code can focus on what the data *represents* rather
+than where it sits.
 
 ```python
-t.read_cell(row="Revenue", column="North")
+from pyhandlexl import Table
+
+t = Table.read("budget.xlsx")
+t.read_cell(row="Revenue", column="North")   # by name, not "B2"
 t.add_row("Q3", [120, 90, 60])
-t.drop_column("draft")
+t.write("budget.xlsx")                        # safe, atomic write
 ```
 
-Load a sheet, edit it in place, write it back — with safe writes that leave the
-original file intact even if something fails partway. For sheets that are not a
-clean table, a raw grid layer is there too.
-
-Built on [openpyxl](https://openpyxl.readthedocs.io/) and built to grow.
-
-- **`Table`** — the main way in. A labelled table: column headers, row labels,
-  and a data grid you address by name. Read, edit in place, write back.
-- **`read_sheet` / `write_sheet`** — direct grid access for sheets that are not
-  a labelled table.
+- **`Table`** — a worksheet as a labelled table: column headers, row labels, and
+  a data grid you address by name.
+- **`read_sheet` / `write_sheet`** — raw grid access for sheets that are not a
+  clean table.
 
 > **Version 0.2.1.** Usable today and under active development — expect new
 > capabilities with each release, and some API changes as it matures.
