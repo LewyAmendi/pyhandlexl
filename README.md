@@ -5,21 +5,34 @@
 
 **Make an Excel file the database for your next project.**
 
-A spreadsheet is the most portable data store there is: every machine opens it,
-anyone can read or edit it without knowing a query language, it versions as a
-single file, and there is no server to run. `pyhandlexl` makes driving one from
-Python dependable — read and write raw cell values in a known order, with writes
-that leave the file intact even when things go wrong.
+Spreadsheets are the most portable data store there is — every machine opens
+one, anyone can read or edit it without a query language, it versions as a
+single file, and there is no server to run. The catch is working with one from
+code: reach for a raw library and you are back to juggling cell coordinates,
+counting columns, and walking rows by index.
+
+`pyhandlexl` hands you the spreadsheet as an **organised table** instead. Row 1
+is your column headers, column A is your row labels, and you read and write data
+*by name*:
+
+```python
+t.read_cell(row="Revenue", column="North")
+t.add_row("Q3", [120, 90, 60])
+t.drop_column("draft")
+```
+
+Load a sheet, edit it in place, write it back — with safe writes that leave the
+original file intact even if something fails partway. For sheets that are not a
+clean table, a raw grid layer is there too.
 
 Built on [openpyxl](https://openpyxl.readthedocs.io/) and built to grow.
 
-- **`Table`** — the main way in. Row 1 holds your column headers, column A holds
-  your row labels, and everything from `B2` on is data. Read it, edit it by name,
-  write it back.
-- **`read_sheet` / `write_sheet`** — direct grid access for sheets that aren't a
-  labelled table.
+- **`Table`** — the main way in. A labelled table: column headers, row labels,
+  and a data grid you address by name. Read, edit in place, write back.
+- **`read_sheet` / `write_sheet`** — direct grid access for sheets that are not
+  a labelled table.
 
-> **Version 0.2.0.** Usable today and under active development — expect new
+> **Version 0.2.1.** Usable today and under active development — expect new
 > capabilities with each release, and some API changes as it matures.
 
 ## Install
@@ -57,6 +70,12 @@ t.write("budget.xlsx")     # one safe, atomic write
 > `str` (empty cells become `""`). Convert to numbers yourself where you need to.
 
 ## The `Table` class
+
+A `Table` treats a worksheet as structured data: row 1 is the column headers,
+column A is the row labels, `A1` is the corner, and everything from `B2` on is
+the data. You work with it by name — rows, columns, and cells are addressed by
+their label, not their position — and it stays in sync as you add, drop, or
+rename rows and columns.
 
 ### Reading
 
