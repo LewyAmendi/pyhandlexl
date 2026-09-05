@@ -22,3 +22,6 @@ Thumbs.db
 
 # Test scratch files (xlsx we generate during tests)
 *.tmp.xlsx
+
+# Manual/exploratory testing — never committed
+/scratch/

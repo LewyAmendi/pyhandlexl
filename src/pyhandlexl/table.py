@@ -2,41 +2,62 @@
 
 Layout convention: row 1 holds the column headers, column A holds the row
 labels, cell A1 is the "corner", and the data region is everything from B2
-onward. Positional access uses Excel coordinates (row 1 is the header row,
-column 1 is the label column).
+onward. Row labels and column headers are always strings. Positional access
+uses Excel coordinates (row 1 is the header row, column 1 is the label column).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
-from openpyxl.utils import column_index_from_string, coordinate_to_tuple
+from openpyxl.utils import coordinate_to_tuple
 
 from pyhandlexl.core import read_sheet, write_sheet
+
+
+@dataclass(frozen=True)
+class TableData:
+    """A read-only snapshot of a Table's content."""
+
+    rows: list[list[object]]
+    columns: list[list[object]]
+    row_labels: list[str]
+    column_headers: list[str]
+    corner: object
 
 
 class Table:
     """A labeled table backed by a worksheet.
 
     Construct directly from parts, or with :meth:`read` from a file. Mutation
-    methods edit the table in place and return ``None``.
+    methods edit the table in place and return ``None``. Row labels and column
+    headers are always ``str``.
     """
 
     def __init__(
         self,
         data: Iterable[Iterable[object]],
-        column_headers: Iterable[object] = (),
-        row_labels: Iterable[object] = (),
+        column_headers: Iterable[str] = (),
+        row_labels: Iterable[str] = (),
         corner: object = "",
     ) -> None:
         self._data: list[list[object]] = [list(row) for row in data]
-        self._column_headers: list[object] = list(column_headers)
-        self._row_labels: list[object] = list(row_labels)
+        self._column_headers: list[str] = list(column_headers)
+        self._row_labels: list[str] = list(row_labels)
         self._corner: object = corner
         self._validate()
 
     def _validate(self) -> None:
+        for label in self._row_labels:
+            if not isinstance(label, str):
+                raise TypeError(f"row labels must be str, got {type(label).__name__}: {label!r}")
+        for header in self._column_headers:
+            if not isinstance(header, str):
+                raise TypeError(
+                    f"column headers must be str, got {type(header).__name__}: {header!r}"
+                )
         if self._row_labels and len(self._row_labels) != len(self._data):
             raise ValueError(f"{len(self._data)} data rows but {len(self._row_labels)} row labels")
         if self._column_headers:
@@ -84,7 +105,7 @@ class Table:
 
     @property
     def corner(self) -> object:
-        """The value of cell A1."""
+        """The value of cell A1. Settable — this is how you change it."""
         return self._corner
 
     @corner.setter
@@ -92,48 +113,40 @@ class Table:
         self._corner = value
 
     @property
-    def column_headers(self) -> list[object]:
-        """The column headers (row 1, from B1)."""
-        return list(self._column_headers)
-
-    @property
-    def row_labels(self) -> list[object]:
-        """The row labels (column A, from A2)."""
-        return list(self._row_labels)
-
-    @property
-    def data(self) -> list[list[object]]:
-        """The data region (B2 onward) as a list of rows."""
-        return [list(row) for row in self._data]
+    def data(self) -> TableData:
+        """A snapshot of the table's rows, columns, row labels, column headers, and corner."""
+        return TableData(
+            rows=[list(row) for row in self._data],
+            columns=[list(column) for column in zip(*self._data, strict=True)],
+            row_labels=list(self._row_labels),
+            column_headers=list(self._column_headers),
+            corner=self._corner,
+        )
 
     # ---------------------------------------------------------- label access
 
-    def _row_index(self, label: object) -> int:
+    def _row_index(self, label: str) -> int:
         try:
             return self._row_labels.index(label)
         except ValueError:
             raise KeyError(f"no row labeled {label!r}") from None
 
-    def _column_index(self, header: object) -> int:
+    def _column_index(self, header: str) -> int:
         try:
             return self._column_headers.index(header)
         except ValueError:
             raise KeyError(f"no column headed {header!r}") from None
 
-    def at(self, row_label: object, column_header: object) -> object:
-        """The single value at the intersection of *row_label* and *column_header*."""
-        return self._data[self._row_index(row_label)][self._column_index(column_header)]
-
-    def row(self, row_label: object) -> list[object]:
+    def read_row(self, row_label: str) -> list[object]:
         """The data row for *row_label* (labels not included)."""
         return list(self._data[self._row_index(row_label)])
 
-    def column(self, column_header: object) -> list[object]:
+    def read_column(self, column_header: str) -> list[object]:
         """The data column for *column_header* (headers not included)."""
         j = self._column_index(column_header)
         return [row[j] for row in self._data]
 
-    # ----------------------------------------------------- positional access
+    # ------------------------------------------------- position/label access
 
     def _width(self) -> int:
         if self._column_headers:
@@ -146,19 +159,6 @@ class Table:
         n_rows = row_start + len(self._data)
         n_cols = col_start + self._width()
         return row_start, col_start, n_rows, n_cols
-
-    def _resolve(
-        self, ref: str | None, row: int | None, column: int | str | None
-    ) -> tuple[int, int]:
-        """Turn a ref like ``"B2"`` or a ``row``/``column`` pair into a 1-based (row, col)."""
-        if ref is not None:
-            if row is not None or column is not None:
-                raise TypeError("give either ref or row=/column=, not both")
-            return coordinate_to_tuple(ref)
-        if row is None or column is None:
-            raise TypeError("give a ref like 'B2', or both row= and column=")
-        col_num = column_index_from_string(column) if isinstance(column, str) else column
-        return row, col_num
 
     def _classify(self, row: int, col_num: int) -> tuple[str, int, int]:
         """Return ``(kind, i, j)`` where *kind* is corner/header/label/data.
@@ -180,63 +180,95 @@ class Table:
             return "label", row - 1 - row_start, 0
         return "data", row - 1 - row_start, col_num - 1 - col_start
 
-    def cell(
+    def _dispatch(
+        self, ref: str | None, row: int | str | None, column: int | str | None
+    ) -> tuple[bool, int | str, int | str]:
+        """Resolve ``ref``/``row``/``column`` into ``(is_position, row_val, col_val)``.
+
+        ``is_position=True`` — ``row_val``/``col_val`` are 1-based Excel ints.
+        ``is_position=False`` — they are a row label / column header string.
+        """
+        if ref is not None:
+            if row is not None or column is not None:
+                raise TypeError("give either ref or row=/column=, not both")
+            r, c = coordinate_to_tuple(ref)
+            return True, r, c
+
+        if row is None or column is None:
+            raise TypeError("give a ref like 'B2', or both row= and column=")
+
+        if isinstance(row, int) and isinstance(column, int):
+            return True, row, column
+        if isinstance(row, str) and isinstance(column, str):
+            return False, row, column
+        raise TypeError("row and column must both be int (position) or both be str (label)")
+
+    def read_cell(
         self,
         ref: str | None = None,
         *,
-        row: int | None = None,
+        row: int | str | None = None,
         column: int | str | None = None,
     ) -> object:
-        """A single value by Excel coordinate.
+        """A single value, addressed either by position or by label.
 
-        Give either a reference like ``"B2"`` or ``row=`` and ``column=``
-        (1-based; ``column`` may be a letter or a number). Row 1 is the header
-        row and column 1 is the label column, so ``cell(row=2, column=2)`` is
-        the first data cell.
+        Give either a ref like ``"B2"``, or ``row=``/``column=`` as a matching
+        pair: both ints for a 1-based Excel position (row 1 is the header row,
+        column 1 is the label column, so ``read_cell(row=2, column=2)`` is the
+        first data cell), or both strings for a row label / column header pair
+        — e.g. ``read_cell(row="Alice", column="q1")``.
+
+        By position, ``read_cell`` can reach any cell — header, label, corner,
+        or data. By label it always reads data (the label-addressed equivalent
+        of ``read_cell(row=2, column=2)``, wherever that intersection lives).
         """
-        r, c = self._resolve(ref, row, column)
-        kind, i, j = self._classify(r, c)
-        if kind == "corner":
-            return self._corner
-        if kind == "header":
-            return self._column_headers[j]
-        if kind == "label":
-            return self._row_labels[i]
-        return self._data[i][j]
+        is_position, r, c = self._dispatch(ref, row, column)
+        if is_position:
+            kind, i, j = self._classify(r, c)
+            if kind == "corner":
+                return self._corner
+            if kind == "header":
+                return self._column_headers[j]
+            if kind == "label":
+                return self._row_labels[i]
+            return self._data[i][j]
+        return self._data[self._row_index(r)][self._column_index(c)]
 
     # -------------------------------------------------------------- mutation
-
-    def set(self, row_label: object, column_header: object, value: object) -> None:
-        """Set the single data value at *row_label* / *column_header*."""
-        i = self._row_index(row_label)
-        j = self._column_index(column_header)
-        self._data[i][j] = value
 
     def set_cell(
         self,
         ref: str | None = None,
         *,
-        row: int | None = None,
+        row: int | str | None = None,
         column: int | str | None = None,
         value: object,
     ) -> None:
-        """Set a value by Excel coordinate.
+        """Set a single **data** value, addressed by position or by label.
 
-        A cell in row 1 sets a column header; row 1 / column 1 sets the corner;
-        column 1 sets a row label; anything else sets data.
+        Same addressing as :meth:`read_cell`. Only ever sets data — by
+        position, addressing a header, row label, or the corner raises
+        ``ValueError``; use :meth:`rename_column`, :meth:`rename_row`, or the
+        ``corner`` property for those. By label there's no other kind of cell
+        to reach, so it always sets data.
         """
-        r, c = self._resolve(ref, row, column)
-        kind, i, j = self._classify(r, c)
-        if kind == "corner":
-            self._corner = value
-        elif kind == "header":
-            self._column_headers[j] = value
-        elif kind == "label":
-            self._row_labels[i] = value
+        is_position, r, c = self._dispatch(ref, row, column)
+        if is_position:
+            self._set_by_position(r, c, value)
         else:
-            self._data[i][j] = value
+            self._data[self._row_index(r)][self._column_index(c)] = value
 
-    def set_row(self, row_label: object, values: Iterable[object]) -> None:
+    def _set_by_position(self, row: int, col_num: int, value: object) -> None:
+        kind, i, j = self._classify(row, col_num)
+        if kind == "corner":
+            raise ValueError("that cell is the corner — set it with table.corner = value")
+        if kind == "header":
+            raise ValueError("that cell is a column header — rename it with rename_column()")
+        if kind == "label":
+            raise ValueError("that cell is a row label — rename it with rename_row()")
+        self._data[i][j] = value
+
+    def set_row(self, row_label: str, values: Iterable[object]) -> None:
         """Replace the data row for *row_label*; ``len(values)`` must match the column count."""
         new_row = list(values)
         i = self._row_index(row_label)
@@ -245,7 +277,7 @@ class Table:
             raise ValueError(f"expected {expected} values, got {len(new_row)}")
         self._data[i] = new_row
 
-    def set_column(self, column_header: object, values: Iterable[object]) -> None:
+    def set_column(self, column_header: str, values: Iterable[object]) -> None:
         """Replace the data column for *column_header*; ``len(values)`` must match the row count."""
         new_col = list(values)
         j = self._column_index(column_header)
@@ -254,8 +286,10 @@ class Table:
         for data_row, value in zip(self._data, new_col, strict=True):
             data_row[j] = value
 
-    def add_row(self, label: object, values: Iterable[object]) -> None:
+    def add_row(self, label: str, values: Iterable[object]) -> None:
         """Append a labeled data row; ``len(values)`` must match the column count."""
+        if not isinstance(label, str):
+            raise TypeError(f"row label must be str, got {type(label).__name__}: {label!r}")
         new_row = list(values)
         if self._data and not self._row_labels:
             raise ValueError("this table has no row labels; use the raw layer to add rows")
@@ -264,8 +298,10 @@ class Table:
         self._data.append(new_row)
         self._row_labels.append(label)
 
-    def add_column(self, header: object, values: Iterable[object]) -> None:
+    def add_column(self, header: str, values: Iterable[object]) -> None:
         """Append a labeled data column; ``len(values)`` must match the row count."""
+        if not isinstance(header, str):
+            raise TypeError(f"column header must be str, got {type(header).__name__}: {header!r}")
         new_col = list(values)
         if any(self._data) and not self._column_headers:
             raise ValueError("this table has no column headers; use the raw layer to add columns")
@@ -275,25 +311,29 @@ class Table:
             data_row.append(value)
         self._column_headers.append(header)
 
-    def drop_row(self, label: object) -> None:
+    def drop_row(self, label: str) -> None:
         """Remove the row labeled *label*."""
         i = self._row_index(label)
         del self._data[i]
         del self._row_labels[i]
 
-    def drop_column(self, header: object) -> None:
+    def drop_column(self, header: str) -> None:
         """Remove the column headed *header*."""
         j = self._column_index(header)
         del self._column_headers[j]
         for data_row in self._data:
             del data_row[j]
 
-    def rename_row(self, old: object, new: object) -> None:
+    def rename_row(self, old: str, new: str) -> None:
         """Change a row label."""
+        if not isinstance(new, str):
+            raise TypeError(f"row label must be str, got {type(new).__name__}: {new!r}")
         self._row_labels[self._row_index(old)] = new
 
-    def rename_column(self, old: object, new: object) -> None:
+    def rename_column(self, old: str, new: str) -> None:
         """Change a column header."""
+        if not isinstance(new, str):
+            raise TypeError(f"column header must be str, got {type(new).__name__}: {new!r}")
         self._column_headers[self._column_index(old)] = new
 
     # ----------------------------------------------------------------- write
@@ -315,18 +355,6 @@ class Table:
         write_sheet(path, self._assemble(), sheet)
 
     # --------------------------------------------------------------- dunders
-
-    def __len__(self) -> int:
-        return len(self._data)
-
-    def __iter__(self) -> Iterator[list[object]]:
-        return iter([list(row) for row in self._data])
-
-    def __getitem__(self, row_label: object) -> list[object]:
-        return self.row(row_label)
-
-    def __contains__(self, row_label: object) -> bool:
-        return row_label in self._row_labels
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Table):
