@@ -287,9 +287,15 @@ class Table:
             data_row[j] = value
 
     def add_row(self, label: str, values: Iterable[object]) -> None:
-        """Append a labeled data row; ``len(values)`` must match the column count."""
+        """Append a labeled data row.
+
+        ``len(values)`` must match the column count, and *label* must not
+        already be in use (``ValueError``).
+        """
         if not isinstance(label, str):
             raise TypeError(f"row label must be str, got {type(label).__name__}: {label!r}")
+        if label in self._row_labels:
+            raise ValueError(f"row label {label!r} already exists")
         new_row = list(values)
         if self._data and not self._row_labels:
             raise ValueError("this table has no row labels; use the raw layer to add rows")
@@ -299,9 +305,15 @@ class Table:
         self._row_labels.append(label)
 
     def add_column(self, header: str, values: Iterable[object]) -> None:
-        """Append a labeled data column; ``len(values)`` must match the row count."""
+        """Append a labeled data column.
+
+        ``len(values)`` must match the row count, and *header* must not
+        already be in use (``ValueError``).
+        """
         if not isinstance(header, str):
             raise TypeError(f"column header must be str, got {type(header).__name__}: {header!r}")
+        if header in self._column_headers:
+            raise ValueError(f"column header {header!r} already exists")
         new_col = list(values)
         if any(self._data) and not self._column_headers:
             raise ValueError("this table has no column headers; use the raw layer to add columns")
@@ -325,16 +337,22 @@ class Table:
             del data_row[j]
 
     def rename_row(self, old: str, new: str) -> None:
-        """Change a row label."""
+        """Change a row label; *new* must not already be in use (``ValueError``)."""
         if not isinstance(new, str):
             raise TypeError(f"row label must be str, got {type(new).__name__}: {new!r}")
-        self._row_labels[self._row_index(old)] = new
+        i = self._row_index(old)
+        if new != old and new in self._row_labels:
+            raise ValueError(f"row label {new!r} already exists")
+        self._row_labels[i] = new
 
     def rename_column(self, old: str, new: str) -> None:
-        """Change a column header."""
+        """Change a column header; *new* must not already be in use (``ValueError``)."""
         if not isinstance(new, str):
             raise TypeError(f"column header must be str, got {type(new).__name__}: {new!r}")
-        self._column_headers[self._column_index(old)] = new
+        j = self._column_index(old)
+        if new != old and new in self._column_headers:
+            raise ValueError(f"column header {new!r} already exists")
+        self._column_headers[j] = new
 
     # ----------------------------------------------------------------- write
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `Table.add_row`, `add_column`, `rename_row`, and `rename_column` now refuse to
+  create a duplicate row label or column header (`ValueError`). Constructing a
+  `Table` or reading one from a file still allows duplicates.
+
 ### Changed
 - Docs and package summary reframed around the `Table` API — reading and
   writing Excel worksheets as organised, labelled tables — rather than raw

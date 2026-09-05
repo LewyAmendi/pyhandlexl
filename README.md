@@ -113,7 +113,10 @@ t.read_row("Bob")            # a data row (no label)
 t.read_column("q1")          # a data column (no header)
 ```
 
-Unknown labels raise `KeyError`. If a label appears twice, the first match wins.
+Unknown labels raise `KeyError`. `add_row` / `add_column` / `rename_row` /
+`rename_column` refuse to create a duplicate label (`ValueError`); a table read
+from a file may still contain duplicates, in which case reads take the first
+match.
 
 ### `read_cell` / `set_cell` — a single value, by position or by label
 
@@ -162,9 +165,9 @@ t.corner = "name"
 
 `set_cell` only ever touches **data** — addressing a header, row label, or the
 corner by position raises `ValueError`; use `rename_row`, `rename_column`, or
-`t.corner = value` for those. Wrong-length values raise `ValueError`; unknown
-labels raise `KeyError`; a non-`str` row label or column header (in `add_row`,
-`add_column`, `rename_row`, `rename_column`) raises `TypeError`.
+`t.corner = value` for those. Wrong-length values, and a name that would
+duplicate an existing label/header, raise `ValueError`; unknown labels raise
+`KeyError`; a non-`str` row label or column header raises `TypeError`.
 
 You can also build a table from nothing:
 

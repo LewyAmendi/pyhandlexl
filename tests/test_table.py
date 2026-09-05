@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyhandlexl.core import read_sheet
+from pyhandlexl.core import read_sheet, write_sheet
 from pyhandlexl.table import Table, TableData
 
 
@@ -43,6 +43,15 @@ class TestConstruction:
     def test_non_string_column_header_raises_typeerror(self):
         with pytest.raises(TypeError):
             Table(data=[["1"]], column_headers=[1], row_labels=["x"])
+
+    def test_constructor_allows_duplicate_labels(self):
+        # the API blocks *creating* duplicates; ingesting them is allowed
+        t = Table(
+            data=[["1"], ["2"]],
+            column_headers=["a"],
+            row_labels=["dup", "dup"],
+        )
+        assert t.data.row_labels == ["dup", "dup"]
 
 
 class TestData:
@@ -165,6 +174,12 @@ class TestReadWriteRoundTrip:
         with pytest.raises(FileNotFoundError):
             Table.read(tmp_path / "nope.xlsx")
 
+    def test_read_allows_a_file_with_duplicate_headers(self, tmp_path):
+        path = tmp_path / "messy.xlsx"
+        write_sheet(path, [["", "amount", "amount"], ["Jan", "10", "20"]])
+        t = Table.read(path)
+        assert t.data.column_headers == ["amount", "amount"]
+
 
 class TestSetCell:
     def test_set_by_label(self, sample):
@@ -247,6 +262,10 @@ class TestAdd:
         with pytest.raises(TypeError):
             sample.add_row(123, [1, 2, 3])
 
+    def test_add_row_duplicate_label_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.add_row("Revenue", [1, 2, 3])
+
     def test_add_column(self, sample):
         sample.add_column("West", [10, 20])
         assert sample.data.column_headers == ["North", "South", "East", "West"]
@@ -260,6 +279,10 @@ class TestAdd:
     def test_add_column_non_string_header_raises(self, sample):
         with pytest.raises(TypeError):
             sample.add_column(123, [10, 20])
+
+    def test_add_column_duplicate_header_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.add_column("North", [10, 20])
 
     def test_build_table_from_empty(self):
         t = Table(data=[], column_headers=["a", "b"])
@@ -298,6 +321,20 @@ class TestRemoveAndRename:
             sample.rename_row("Revenue", 123)
         with pytest.raises(TypeError):
             sample.rename_column("North", 123)
+
+    def test_rename_to_existing_label_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.rename_row("Revenue", "Costs")
+        with pytest.raises(ValueError):
+            sample.rename_column("North", "South")
+
+    def test_rename_to_same_name_is_allowed(self, sample):
+        sample.rename_row("Revenue", "Revenue")
+        assert sample.data.row_labels == ["Revenue", "Costs"]
+
+    def test_rename_unknown_old_raises_keyerror_not_valueerror(self, sample):
+        with pytest.raises(KeyError):
+            sample.rename_row("Ghost", "Costs")
 
 
 class TestMutationKeepsInvariants:
