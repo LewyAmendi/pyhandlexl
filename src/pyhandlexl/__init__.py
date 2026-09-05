@@ -18,10 +18,10 @@ from pyhandlexl.errors import (
     SheetNameError,
     SheetNotFoundError,
 )
-from pyhandlexl.table import Table
+from pyhandlexl.table import Table, TableData
 from pyhandlexl.validate import check_dimensions, check_sheet_name, is_valid_xlsx
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "DimensionError",
@@ -31,6 +31,7 @@ __all__ = [
     "SheetNameError",
     "SheetNotFoundError",
     "Table",
+    "TableData",
     "append_rows",
     "check_dimensions",
     "check_sheet_name",

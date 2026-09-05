@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pyhandlexl.core import read_sheet
-from pyhandlexl.table import Table
+from pyhandlexl.table import Table, TableData
 
 
 @pytest.fixture
@@ -32,69 +32,98 @@ class TestConstruction:
 
     def test_grid_only_is_allowed(self):
         t = Table(data=[["1", "2"], ["3", "4"]])
-        assert t.data == [["1", "2"], ["3", "4"]]
-        assert t.column_headers == []
-        assert t.row_labels == []
+        assert t.data.rows == [["1", "2"], ["3", "4"]]
+        assert t.data.column_headers == []
+        assert t.data.row_labels == []
+
+    def test_non_string_row_label_raises_typeerror(self):
+        with pytest.raises(TypeError):
+            Table(data=[["1"]], column_headers=["a"], row_labels=[1])
+
+    def test_non_string_column_header_raises_typeerror(self):
+        with pytest.raises(TypeError):
+            Table(data=[["1"]], column_headers=[1], row_labels=["x"])
 
 
-class TestProperties:
-    def test_parts(self, sample):
-        assert sample.corner == "Metric"
-        assert sample.column_headers == ["North", "South", "East"]
-        assert sample.row_labels == ["Revenue", "Costs"]
-        assert sample.data == [["100", "200", "150"], ["40", "60", "55"]]
+class TestData:
+    def test_data_snapshot(self, sample):
+        d = sample.data
+        assert isinstance(d, TableData)
+        assert d.rows == [["100", "200", "150"], ["40", "60", "55"]]
+        assert d.columns == [["100", "40"], ["200", "60"], ["150", "55"]]
+        assert d.row_labels == ["Revenue", "Costs"]
+        assert d.column_headers == ["North", "South", "East"]
+        assert d.corner == "Metric"
 
-    def test_properties_return_copies(self, sample):
-        sample.data.append(["999"])
-        sample.column_headers.append("West")
-        assert len(sample.data) == 2
-        assert sample.column_headers == ["North", "South", "East"]
+    def test_data_is_a_fresh_copy_each_time(self, sample):
+        sample.data.rows.append(["999"])
+        sample.data.column_headers.append("West")
+        assert len(sample.data.rows) == 2
+        assert sample.data.column_headers == ["North", "South", "East"]
+
+    def test_corner_is_settable(self, sample):
+        sample.corner = "Quarter"
+        assert sample.corner == "Quarter"
+        assert sample.data.corner == "Quarter"
 
 
 class TestLabelAccess:
-    def test_at(self, sample):
-        assert sample.at("Revenue", "North") == "100"
-        assert sample.at("Costs", "East") == "55"
-
     def test_row_and_column(self, sample):
-        assert sample.row("Revenue") == ["100", "200", "150"]
-        assert sample.column("South") == ["200", "60"]
+        assert sample.read_row("Revenue") == ["100", "200", "150"]
+        assert sample.read_column("South") == ["200", "60"]
+
+    def test_unknown_row_or_column_raises_keyerror(self, sample):
+        with pytest.raises(KeyError):
+            sample.read_row("Profit")
+        with pytest.raises(KeyError):
+            sample.read_column("West")
+
+
+class TestCellByLabel:
+    def test_reads_data(self, sample):
+        assert sample.read_cell(row="Revenue", column="North") == "100"
+        assert sample.read_cell(row="Costs", column="East") == "55"
 
     def test_unknown_label_raises_keyerror(self, sample):
         with pytest.raises(KeyError):
-            sample.at("Profit", "North")
+            sample.read_cell(row="Profit", column="North")
         with pytest.raises(KeyError):
-            sample.column("West")
+            sample.read_cell(row="Revenue", column="West")
+
+    def test_requires_both_row_and_column(self, sample):
+        with pytest.raises(TypeError):
+            sample.read_cell(row="Revenue")
+        with pytest.raises(TypeError):
+            sample.read_cell(column="North")
+
+    def test_cannot_mix_position_and_label(self, sample):
+        with pytest.raises(TypeError):
+            sample.read_cell(row=2, column="North")
+        with pytest.raises(TypeError):
+            sample.read_cell(row="Revenue", column=2)
 
 
-class TestPositionalAccess:
+class TestCellByPosition:
     def test_data_cell_by_ref_and_by_rowcol(self, sample):
-        assert sample.cell("B2") == "100"
-        assert sample.cell(row=2, column=2) == "100"
-        assert sample.cell(row=3, column="D") == "55"
+        assert sample.read_cell("B2") == "100"
+        assert sample.read_cell(row=2, column=2) == "100"
+        assert sample.read_cell("D3") == "55"
 
     def test_headers_and_labels_and_corner(self, sample):
-        assert sample.cell(row=1, column=1) == "Metric"
-        assert sample.cell(row=1, column=2) == "North"
-        assert sample.cell(row=2, column=1) == "Revenue"
+        assert sample.read_cell(row=1, column=1) == "Metric"
+        assert sample.read_cell(row=1, column=2) == "North"
+        assert sample.read_cell(row=2, column=1) == "Revenue"
 
     def test_out_of_range_raises(self, sample):
         with pytest.raises(IndexError):
-            sample.cell(row=99, column=1)
+            sample.read_cell(row=99, column=1)
 
     def test_ref_and_rowcol_together_is_error(self, sample):
         with pytest.raises(TypeError):
-            sample.cell("B2", row=2)
+            sample.read_cell("B2", row=2)
 
 
 class TestDunders:
-    def test_len_iter_getitem_contains(self, sample):
-        assert len(sample) == 2
-        assert list(sample) == [["100", "200", "150"], ["40", "60", "55"]]
-        assert sample["Costs"] == ["40", "60", "55"]
-        assert "Revenue" in sample
-        assert "Profit" not in sample
-
     def test_equality(self, sample):
         same = Table(
             data=[["100", "200", "150"], ["40", "60", "55"]],
@@ -128,49 +157,67 @@ class TestReadWriteRoundTrip:
             column_headers=["a", "b"],
         ).write(path)
         t = Table.read(path, row_labels=False)
-        assert t.column_headers == ["a", "b"]
-        assert t.row_labels == []
-        assert t.data == [["1", "2"]]
+        assert t.data.column_headers == ["a", "b"]
+        assert t.data.row_labels == []
+        assert t.data.rows == [["1", "2"]]
 
     def test_read_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             Table.read(tmp_path / "nope.xlsx")
 
 
-class TestSetValues:
+class TestSetCell:
     def test_set_by_label(self, sample):
-        sample.set("Revenue", "North", 120)
-        assert sample.at("Revenue", "North") == 120
+        sample.set_cell(row="Revenue", column="North", value=120)
+        assert sample.read_cell(row="Revenue", column="North") == 120
 
     def test_set_unknown_label_raises(self, sample):
         with pytest.raises(KeyError):
-            sample.set("Profit", "North", 1)
+            sample.set_cell(row="Profit", column="North", value=1)
 
-    def test_set_cell_data(self, sample):
+    def test_set_by_position_via_ref(self, sample):
         sample.set_cell("B2", value=999)
-        assert sample.at("Revenue", "North") == 999
+        assert sample.read_cell(row="Revenue", column="North") == 999
 
-    def test_set_cell_header_label_corner(self, sample):
-        sample.set_cell(row=1, column=2, value="N")
-        sample.set_cell(row=2, column=1, value="Rev")
-        sample.set_cell(row=1, column=1, value="M")
-        assert sample.column_headers == ["N", "South", "East"]
-        assert sample.row_labels == ["Rev", "Costs"]
-        assert sample.corner == "M"
+    def test_set_by_position_via_rowcol(self, sample):
+        sample.set_cell(row=2, column=2, value=999)
+        assert sample.read_cell(row="Revenue", column="North") == 999
 
-    def test_set_cell_out_of_range_raises(self, sample):
+    def test_cannot_set_header_by_position(self, sample):
+        with pytest.raises(ValueError):
+            sample.set_cell(row=1, column=2, value="N")
+
+    def test_cannot_set_row_label_by_position(self, sample):
+        with pytest.raises(ValueError):
+            sample.set_cell(row=2, column=1, value="Rev")
+
+    def test_cannot_set_corner_by_position(self, sample):
+        with pytest.raises(ValueError):
+            sample.set_cell(row=1, column=1, value="M")
+
+    def test_out_of_range_raises(self, sample):
         with pytest.raises(IndexError):
             sample.set_cell(row=50, column=1, value=1)
 
-    def test_corner_is_settable(self, sample):
-        sample.corner = "Quarter"
-        assert sample.corner == "Quarter"
+    def test_requires_both_row_and_column(self, sample):
+        with pytest.raises(TypeError):
+            sample.set_cell(row="Revenue", value=1)
+
+    def test_cannot_mix_position_and_label(self, sample):
+        with pytest.raises(TypeError):
+            sample.set_cell(row=2, column="North", value=1)
+        with pytest.raises(TypeError):
+            sample.set_cell(row="Revenue", column=2, value=1)
+
+    def test_ref_and_rowcol_together_is_error(self, sample):
+        with pytest.raises(TypeError):
+            sample.set_cell("B2", row=2, column=2, value=1)
 
 
 class TestReplaceLine:
     def test_set_row(self, sample):
         sample.set_row("Revenue", [1, 2, 3])
-        assert sample.row("Revenue") == [1, 2, 3]
+        assert sample.read_row("Revenue") == [1, 2, 3]
 
     def test_set_row_wrong_length_raises(self, sample):
         with pytest.raises(ValueError):
@@ -178,7 +225,7 @@ class TestReplaceLine:
 
     def test_set_column(self, sample):
         sample.set_column("North", ["x", "y"])
-        assert sample.column("North") == ["x", "y"]
+        assert sample.read_column("North") == ["x", "y"]
 
     def test_set_column_wrong_length_raises(self, sample):
         with pytest.raises(ValueError):
@@ -188,42 +235,50 @@ class TestReplaceLine:
 class TestAdd:
     def test_add_row(self, sample):
         sample.add_row("Profit", [60, 140, 95])
-        assert sample.row_labels == ["Revenue", "Costs", "Profit"]
-        assert sample.row("Profit") == [60, 140, 95]
-        assert len(sample) == 3
+        assert sample.data.row_labels == ["Revenue", "Costs", "Profit"]
+        assert sample.read_row("Profit") == [60, 140, 95]
+        assert len(sample.data.rows) == 3
 
     def test_add_row_wrong_length_raises(self, sample):
         with pytest.raises(ValueError):
             sample.add_row("Profit", [1, 2])
 
+    def test_add_row_non_string_label_raises(self, sample):
+        with pytest.raises(TypeError):
+            sample.add_row(123, [1, 2, 3])
+
     def test_add_column(self, sample):
         sample.add_column("West", [10, 20])
-        assert sample.column_headers == ["North", "South", "East", "West"]
-        assert sample.column("West") == [10, 20]
-        assert sample.row("Revenue") == ["100", "200", "150", 10]
+        assert sample.data.column_headers == ["North", "South", "East", "West"]
+        assert sample.read_column("West") == [10, 20]
+        assert sample.read_row("Revenue") == ["100", "200", "150", 10]
 
     def test_add_column_wrong_length_raises(self, sample):
         with pytest.raises(ValueError):
             sample.add_column("West", [10])
 
+    def test_add_column_non_string_header_raises(self, sample):
+        with pytest.raises(TypeError):
+            sample.add_column(123, [10, 20])
+
     def test_build_table_from_empty(self):
         t = Table(data=[], column_headers=["a", "b"])
         t.add_row("x", [1, 2])
         t.add_row("y", [3, 4])
-        assert t.data == [[1, 2], [3, 4]]
-        assert t.row_labels == ["x", "y"]
+        assert t.data.rows == [[1, 2], [3, 4]]
+        assert t.data.row_labels == ["x", "y"]
 
 
 class TestRemoveAndRename:
     def test_drop_row(self, sample):
         sample.drop_row("Revenue")
-        assert sample.row_labels == ["Costs"]
-        assert sample.data == [["40", "60", "55"]]
+        assert sample.data.row_labels == ["Costs"]
+        assert sample.data.rows == [["40", "60", "55"]]
 
     def test_drop_column(self, sample):
         sample.drop_column("South")
-        assert sample.column_headers == ["North", "East"]
-        assert sample.row("Revenue") == ["100", "150"]
+        assert sample.data.column_headers == ["North", "East"]
+        assert sample.read_row("Revenue") == ["100", "150"]
 
     def test_drop_unknown_raises(self, sample):
         with pytest.raises(KeyError):
@@ -232,17 +287,23 @@ class TestRemoveAndRename:
     def test_rename_row_and_column(self, sample):
         sample.rename_row("Revenue", "Sales")
         sample.rename_column("North", "N")
-        assert sample.at("Sales", "N") == "100"
+        assert sample.read_cell(row="Sales", column="N") == "100"
 
     def test_rename_unknown_raises(self, sample):
         with pytest.raises(KeyError):
             sample.rename_column("West", "W")
 
+    def test_rename_to_non_string_raises(self, sample):
+        with pytest.raises(TypeError):
+            sample.rename_row("Revenue", 123)
+        with pytest.raises(TypeError):
+            sample.rename_column("North", 123)
+
 
 class TestMutationKeepsInvariants:
     def test_edits_survive_a_round_trip(self, tmp_path, sample):
         # strings only, so the round trip is exact (read_sheet coerces to str)
-        sample.set("Revenue", "North", "111")
+        sample.set_cell(row="Revenue", column="North", value="111")
         sample.add_row("Profit", ["1", "2", "3"])
         sample.drop_column("South")
         sample.rename_row("Costs", "Expenses")

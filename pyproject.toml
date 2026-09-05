@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyhandlexl"
-version = "0.1.0"
-description = "Read and write raw cell values in Excel .xlsx files, safely and simply."
+version = "0.2.0"
+description = "Use an Excel file as the database for your next project."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

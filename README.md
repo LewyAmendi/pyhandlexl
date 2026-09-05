@@ -47,11 +47,11 @@ from pyhandlexl import Table
 
 t = Table.read("budget.xlsx")
 
-t.at("Alice", "q2")        # '20'
-t.row("Bob")               # ['30', '40']
-t.column("q1")             # ['10', '30']
+t.read_cell(row="Alice", column="q2")   # '20'
+t.read_row("Bob")                       # ['30', '40']
+t.read_column("q1")                     # ['10', '30']
 
-t.set("Alice", "q1", 99)   # edit in place
+t.set_cell(row="Alice", column="q1", value=99)   # edit in place
 t.add_row("Carol", [1, 2])
 t.write("budget.xlsx")     # one safe, atomic write
 ```
@@ -71,47 +71,67 @@ Table.read(path, sheet=None, *, column_headers=True, row_labels=True)
 - `column_headers=False` — row 1 is ordinary data, `column_headers` is empty.
 - `row_labels=False` — column A is ordinary data, `row_labels` is empty.
 
-### Properties
+Row labels and column headers are always `str` — required if you build a
+`Table` by hand, too (`Table(..., column_headers=[1, 2])` raises `TypeError`).
+
+### The whole table at once
 
 ```python
-t.corner            # value of cell A1
-t.column_headers    # ['q1', 'q2']       (row 1, from B1)
-t.row_labels        # ['Alice', 'Bob']   (column A, from A2)
-t.data              # [['10', '20'], ['30', '40']]   (B2 onward)
+t.corner       # value of cell A1 (settable: t.corner = "name")
+t.data         # a TableData snapshot
 ```
 
-All four return copies — mutating them does not change the table.
+```python
+d = t.data
+d.rows              # [['10', '20'], ['30', '40']]   (B2 onward, by row)
+d.columns           # [['10', '30'], ['20', '40']]   (same data, by column)
+d.row_labels        # ['Alice', 'Bob']   (column A, from A2)
+d.column_headers    # ['q1', 'q2']       (row 1, from B1)
+d.corner            # value of cell A1
+```
+
+Every field is a fresh copy — mutating `t.data.rows` does not change the table.
 
 ### Access by label
 
 ```python
-t.at("Alice", "q2")     # single value
-t.row("Bob")            # a data row (no label)
-t.column("q1")          # a data column (no header)
+t.read_row("Bob")            # a data row (no label)
+t.read_column("q1")          # a data column (no header)
 ```
 
 Unknown labels raise `KeyError`. If a label appears twice, the first match wins.
 
-### Access by position (Excel coordinates)
+### `read_cell` / `set_cell` — a single value, by position or by label
 
-Positions are exactly what Excel shows: row 1 is the header row, column 1 (`A`)
-is the label column, so `B2` is the first data cell.
+Both take the same addressing: a ref like `"B2"`, or `row=`/`column=` as a
+matching pair — **both ints** for a 1-based Excel position (row 1 is the
+header row, column 1 is the label column), or **both strings** for a row
+label / column header pair. Mixing types raises `TypeError`.
 
 ```python
-t.cell("B2")                    # '10'   — first data cell
-t.cell(row=2, column=2)         # '10'   — same thing
-t.cell(row=1, column=2)         # 'q1'   — a column header
-t.cell(row=2, column=1)         # 'Alice' — a row label
-t.cell("A1")                    # the corner
+t.read_cell("B2")                       # '10' — first data cell, by position
+t.read_cell(row=2, column=2)            # '10' — same thing, spelled out
+t.read_cell(row="Alice", column="q1")   # '10' — same value, by label
+
+t.read_cell(row=1, column=2)   # 'q1'    — a column header
+t.read_cell(row=2, column=1)   # 'Alice' — a row label
+t.read_cell("A1")               # the corner
 ```
 
-`column` accepts a letter (`"B"`) or a 1-based number (`2`).
+By position, `read_cell` can reach *any* cell — header, label, corner, or
+data. By label it always reads data, wherever that row/column intersection
+actually lives.
+
+A string given through `row=`/`column=` is always a label lookup — it does
+**not** accept a column letter like `"B"` for a position. Use a plain number
+(`column=2`) or `ref="B2"` for letter-based positions.
 
 ### Editing (in place, returns `None`)
 
 ```python
-t.set("Alice", "q1", 99)            # set one data value by label
-t.set_cell("B2", value=99)          # set one cell by coordinate
+t.set_cell("B2", value=99)                       # by position — ref
+t.set_cell(row=2, column=2, value=99)            # by position — row=/column= as ints
+t.set_cell(row="Alice", column="q1", value=99)   # by label    — row=/column= as strings
 t.set_row("Bob", [50, 60])          # replace a row   (length must match)
 t.set_column("q1", [1, 2])          # replace a column (length must match)
 
@@ -126,7 +146,11 @@ t.rename_column("q1", "Q1")
 t.corner = "name"
 ```
 
-Wrong-length values raise `ValueError`; unknown labels raise `KeyError`.
+`set_cell` only ever touches **data** — addressing a header, row label, or the
+corner by position raises `ValueError`; use `rename_row`, `rename_column`, or
+`t.corner = value` for those. Wrong-length values raise `ValueError`; unknown
+labels raise `KeyError`; a non-`str` row label or column header (in `add_row`,
+`add_column`, `rename_row`, `rename_column`) raises `TypeError`.
 
 You can also build a table from nothing:
 
@@ -145,15 +169,15 @@ t.write(path, sheet=None)
 Reassembles headers into row 1 and labels into column A, then writes the whole
 sheet. Other sheets in the file are left untouched.
 
-### Container behaviour
+### Equality
 
 ```python
-len(t)              # number of data rows
-list(t)             # the data rows
-t["Alice"]          # same as t.row("Alice")
-"Bob" in t          # checks row labels
 t1 == t2            # compares data, headers, labels, corner
 ```
+
+Row count and row-label membership go through `t.data` instead of `len()`/`in`,
+so the call site says what's being checked: `len(t.data.rows)`,
+`"Bob" in t.data.row_labels`.
 
 ## The raw layer
 
