@@ -21,7 +21,7 @@ from pyhandlexl.errors import (
 from pyhandlexl.table import Table, TableData
 from pyhandlexl.validate import check_dimensions, check_sheet_name, is_valid_xlsx
 
-__version__ = "0.2.1"
+__version__ = "0.2.3"
 
 __all__ = [
     "DimensionError",

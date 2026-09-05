@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-09-05
+
 ### Added
 - `Table.add_row`, `add_column`, `rename_row`, and `rename_column` now refuse to
   create a duplicate row label or column header (`ValueError`). Constructing a
@@ -16,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docs and package summary reframed around the `Table` API — reading and
   writing Excel worksheets as organised, labelled tables — rather than raw
   cell values.
+- CI actions bumped to their Node 24 releases.
 
 ## [0.2.1] — 2026-09-05
 
@@ -79,7 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/LewyAmendi/pyhandlexl/releases/tag/v0.1.0
