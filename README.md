@@ -1,6 +1,7 @@
 # pyhandlexl
 
 [![CI](https://github.com/LewyAmendi/pyhandlexl/actions/workflows/ci.yml/badge.svg)](https://github.com/LewyAmendi/pyhandlexl/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/pyhandlexl)](https://pypi.org/project/pyhandlexl/)
 
 **Make an Excel file the database for your next project.**
 
@@ -18,17 +19,13 @@ Built on [openpyxl](https://openpyxl.readthedocs.io/) and built to grow.
 - **`read_sheet` / `write_sheet`** — direct grid access for sheets that aren't a
   labelled table.
 
-> **Version 0.1.0.** Usable today and under active development — expect new
+> **Version 0.2.0.** Usable today and under active development — expect new
 > capabilities with each release, and some API changes as it matures.
 
 ## Install
 
-Not on PyPI yet. From source:
-
 ```bash
-git clone https://github.com/LewyAmendi/pyhandlexl
-cd pyhandlexl
-pip install -e .
+pip install pyhandlexl
 ```
 
 Requires Python 3.10+.
