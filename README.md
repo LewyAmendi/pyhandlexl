@@ -30,8 +30,9 @@ t.write("budget.xlsx")                        # safe, atomic write
 - **`read_sheet` / `write_sheet`** — raw grid access for sheets that are not a
   clean table.
 
-> **Version 0.2.1.** Usable today and under active development — expect new
-> capabilities with each release, and some API changes as it matures.
+> **Under active development.** Usable today — expect new capabilities with each
+> release, and some API changes before it stabilises. See the
+> [changelog](CHANGELOG.md).
 
 ## Install
 
