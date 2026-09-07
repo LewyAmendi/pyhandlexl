@@ -73,19 +73,6 @@ def safe_load(
     return _retry(lambda: load_workbook(path), path=path, retries=retries, delay=delay)
 
 
-def load_or_create(
-    path: str | Path,
-    *,
-    retries: int = DEFAULT_RETRIES,
-    delay: float = DEFAULT_DELAY,
-) -> Workbook:
-    """Load the workbook at *path*, or return a new empty one if it does not exist."""
-    path = Path(path)
-    if not path.exists():
-        return Workbook()
-    return safe_load(path, retries=retries, delay=delay)
-
-
 def atomic_save(
     workbook: Workbook,
     path: str | Path,

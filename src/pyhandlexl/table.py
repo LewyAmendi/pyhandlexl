@@ -369,7 +369,11 @@ class Table:
         return grid
 
     def write(self, path: str | Path, sheet: str | None = None) -> None:
-        """Write the table to *path*, reassembling headers into row 1 and labels into column A."""
+        """Write the table to *path*, reassembling headers into row 1 and labels into column A.
+
+        The file must already exist — create it first with
+        :func:`pyhandlexl.create_file` (``FileNotFoundError`` otherwise).
+        """
         write_sheet(path, self._assemble(), sheet)
 
     # --------------------------------------------------------------- dunders

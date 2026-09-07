@@ -7,7 +7,9 @@ from itertools import zip_longest
 from pathlib import Path
 from typing import Literal
 
-from pyhandlexl._safety import atomic_save, load_or_create, safe_load
+from openpyxl import Workbook
+
+from pyhandlexl._safety import atomic_save, safe_load
 from pyhandlexl.errors import SheetNotFoundError
 from pyhandlexl.validate import check_dimensions, check_sheet_name
 
@@ -17,6 +19,29 @@ Orientation = Literal["rows", "columns"]
 def _cell_to_str(value: object) -> str:
     """Coerce a cell value to a string; ``None`` becomes ``""``."""
     return "" if value is None else str(value)
+
+
+def create_file(path: str | Path, *, sheet: str = "Sheet") -> None:
+    """Create a new empty .xlsx file with one worksheet.
+
+    Files are never created implicitly — call this first. ``write_sheet``,
+    ``append_rows``, ``create_sheet``, and ``Table.write`` all require the file
+    to exist already.
+
+    Raises:
+        FileExistsError: something is already at *path*.
+        SheetNameError: *sheet* is not a valid worksheet name.
+    """
+    check_sheet_name(sheet)
+    path = Path(path)
+    if path.exists():
+        raise FileExistsError(f"{path} already exists")
+    workbook = Workbook()
+    workbook.active.title = sheet
+    try:
+        atomic_save(workbook, path)
+    finally:
+        workbook.close()
 
 
 def read_sheet(
@@ -74,8 +99,8 @@ def write_sheet(
 ) -> None:
     """Replace a worksheet's contents with *rows*.
 
-    Other worksheets in the file are left untouched. The file is created if it
-    does not exist, and *sheet* is added if it does not exist.
+    Other worksheets in the file are left untouched. *sheet* is added if it
+    does not exist. The file must already exist (see :func:`create_file`).
 
     Values are written as-is (``str``, ``int``, ``float``, ``bool``); ``None``
     leaves the cell empty. No string-to-number conversion is performed.
@@ -88,6 +113,7 @@ def write_sheet(
             ``"columns"`` writes each inner iterable down a column.
 
     Raises:
+        FileNotFoundError: no file at *path*.
         SheetNameError: *sheet* is not a valid worksheet name.
         DimensionError: the data exceeds the .xlsx row or column limits.
         ValueError: *orientation* is not ``"rows"`` or ``"columns"``.
@@ -104,21 +130,15 @@ def write_sheet(
     if sheet is not None:
         check_sheet_name(sheet)
 
-    file_existed = Path(path).is_file()
-    workbook = load_or_create(path)
+    workbook = safe_load(path)
     try:
-        if not file_existed:
-            for name in list(workbook.sheetnames):
-                workbook.remove(workbook[name])
-            worksheet = workbook.create_sheet(title=sheet or "Sheet")
+        name = sheet if sheet is not None else workbook.active.title
+        if name in workbook.sheetnames:
+            index = workbook.sheetnames.index(name)
+            workbook.remove(workbook[name])
+            worksheet = workbook.create_sheet(title=name, index=index)
         else:
-            name = sheet if sheet is not None else workbook.active.title
-            if name in workbook.sheetnames:
-                index = workbook.sheetnames.index(name)
-                workbook.remove(workbook[name])
-                worksheet = workbook.create_sheet(title=name, index=index)
-            else:
-                worksheet = workbook.create_sheet(title=name)
+            worksheet = workbook.create_sheet(title=name)
 
         for row in grid:
             worksheet.append(row)
@@ -134,10 +154,12 @@ def append_rows(
 ) -> None:
     """Append *rows* to the end of a worksheet.
 
-    The file and *sheet* are created if they do not exist. An empty *rows* is
-    a no-op. Values follow the same rules as :func:`write_sheet`.
+    *sheet* is added if it does not exist. An empty *rows* is a no-op. The file
+    must already exist (see :func:`create_file`). Values follow the same rules
+    as :func:`write_sheet`.
 
     Raises:
+        FileNotFoundError: no file at *path*.
         SheetNameError: *sheet* is not a valid worksheet name.
         DimensionError: appending would exceed the .xlsx row or column limits.
     """
@@ -148,7 +170,7 @@ def append_rows(
     if sheet is not None:
         check_sheet_name(sheet)
 
-    workbook = load_or_create(path)
+    workbook = safe_load(path)
     try:
         if sheet is None:
             worksheet = workbook.active
@@ -187,22 +209,21 @@ def sheet_exists(path: str | Path, name: str) -> bool:
 
 
 def create_sheet(path: str | Path, name: str) -> None:
-    """Add an empty worksheet called *name*, creating the file if needed.
+    """Add an empty worksheet called *name*.
+
+    The file must already exist (see :func:`create_file`).
 
     Raises:
+        FileNotFoundError: no file at *path*.
         SheetNameError: *name* is not a valid worksheet name.
         ValueError: a worksheet called *name* already exists.
     """
     check_sheet_name(name)
-    file_existed = Path(path).is_file()
-    workbook = load_or_create(path)
+    workbook = safe_load(path)
     try:
         if name in workbook.sheetnames:
             raise ValueError(f"sheet {name!r} already exists")
-        if file_existed:
-            workbook.create_sheet(title=name)
-        else:
-            workbook.active.title = name
+        workbook.create_sheet(title=name)
         atomic_save(workbook, path)
     finally:
         workbook.close()

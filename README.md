@@ -65,6 +65,16 @@ t.add_row("Carol", [1, 2])
 t.write("budget.xlsx")     # one safe, atomic write
 ```
 
+Starting from scratch? Create the file first — `pyhandlexl` never creates one
+implicitly:
+
+```python
+from pyhandlexl import create_file, Table
+
+create_file("new.xlsx")
+Table(data=[[10, 20]], column_headers=["q1", "q2"], row_labels=["Alice"]).write("new.xlsx")
+```
+
 > **Values are always strings.** `read_sheet` and `Table` coerce every cell to
 > `str` (empty cells become `""`). Convert to numbers yourself where you need to.
 
@@ -173,8 +183,11 @@ duplicate an existing label/header, raise `ValueError`; unknown labels raise
 You can also build a table from nothing:
 
 ```python
+from pyhandlexl import create_file, Table
+
 t = Table([], column_headers=["q1", "q2"])
 t.add_row("Alice", [10, 20])
+create_file("new.xlsx")
 t.write("new.xlsx")
 ```
 
@@ -185,7 +198,8 @@ t.write(path, sheet=None)
 ```
 
 Reassembles headers into row 1 and labels into column A, then writes the whole
-sheet. Other sheets in the file are left untouched.
+sheet. Other sheets in the file are left untouched. The file must already
+exist — see [Files](#files).
 
 ### Equality
 
@@ -196,6 +210,20 @@ t1 == t2            # compares data, headers, labels, corner
 Row count and row-label membership go through `t.data` instead of `len()`/`in`,
 so the call site says what's being checked: `len(t.data.rows)`,
 `"Bob" in t.data.row_labels`.
+
+## Files
+
+`pyhandlexl` **never creates a file implicitly** — this is deliberate, so a
+typo in a path can't silently produce a stray workbook.
+
+```python
+create_file(path, *, sheet="Sheet")
+```
+
+Creates a new empty `.xlsx` with one worksheet. `FileExistsError` if something
+is already at `path`. Every write operation — `write_sheet`, `append_rows`,
+`create_sheet`, `Table.write` — raises `FileNotFoundError` if the file does not
+exist yet.
 
 ## The raw layer
 
@@ -215,17 +243,48 @@ row's length instead.
 write_sheet(path, rows, sheet=None, *, orientation="rows")
 ```
 
-Replaces the target sheet with `rows` (other sheets untouched), creating the
-file and sheet if needed. Values are written as-is — `str` stays `str`, `int`
-stays `int`, `None` leaves the cell empty; there is no string-to-number
-conversion. `orientation="columns"` writes each inner list *down a column*
-instead of across a row.
+Replaces the target sheet with `rows` (other sheets untouched); adds `sheet` if
+it does not exist. Values are written as-is — `str` stays `str`, `int` stays
+`int`, `None` leaves the cell empty; there is no string-to-number conversion.
+`orientation="columns"` writes each inner list *down a column* instead of
+across a row.
 
 ```python
 append_rows(path, rows, sheet=None)
 ```
 
 Appends after the last row. Empty input is a no-op.
+
+### Editing a grid: `pyhandlexl.grid`
+
+Helpers for the `list[list[str]]` that `read_sheet` returns. Each takes a grid
+and returns a **new** grid, so they compose in a pipeline. Rows and columns are
+**1-based** (row 1 is the first row), matching `Table`.
+
+```python
+from pyhandlexl import read_sheet, write_sheet, grid
+
+g = read_sheet("data.xlsx")
+
+g = grid.set_value(g, 2, 3, "changed")   # one cell
+g = grid.set_row(g, 1, ["a", "b", "c"])  # replace a row
+g = grid.set_column(g, 2, [1, 2, 3])     # replace a column
+g = grid.insert_row(g, 2, [...])         # insert before row 2
+g = grid.insert_column(g, 1, [...])      # insert as the new first column
+g = grid.append_row(g, [...])
+g = grid.append_column(g, [...])
+g = grid.delete_row(g, 3)
+g = grid.delete_column(g, 2)
+
+g = grid.transpose(g)   # rows <-> columns (ragged rows padded with "")
+g = grid.pad(g)         # rectangularise
+
+write_sheet("data.xlsx", g)
+```
+
+`get_row(g, i)` / `get_column(g, j)` read a single line. Column operations that
+take `values` require `len(values)` to equal the row count; out-of-range
+indices raise `IndexError`.
 
 ## Sheet management
 
@@ -234,15 +293,16 @@ from pyhandlexl import (
     list_sheets, sheet_exists, create_sheet, delete_sheet, rename_sheet,
 )
 
-list_sheets(path)                 # ['Sheet1', 'Data']
+list_sheets(path)                 # ['Sheet', 'Data']
 sheet_exists(path, "Data")        # True
 create_sheet(path, "Results")     # ValueError if it already exists
 delete_sheet(path, "Old")         # refuses to delete the last sheet
 rename_sheet(path, "Old", "New")
 ```
 
-Sheet names are validated everywhere: max 31 characters, none of `\ / ? * [ ] :`,
-and `"History"` is reserved by Excel.
+`create_sheet` needs an existing file (`create_file` first). Sheet names are
+validated everywhere: max 31 characters, none of `\ / ? * [ ] :`, and
+`"History"` is reserved by Excel.
 
 ## Safe writes
 

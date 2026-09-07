@@ -145,39 +145,36 @@ class TestDunders:
 
 
 class TestReadWriteRoundTrip:
-    def test_write_then_read_reproduces_the_table(self, tmp_path, sample):
-        path = tmp_path / "t.xlsx"
-        sample.write(path)
-        assert Table.read(path) == sample
+    def test_write_then_read_reproduces_the_table(self, book, sample):
+        sample.write(book)
+        assert Table.read(book) == sample
 
-    def test_assembled_grid_layout_on_disk(self, tmp_path, sample):
-        path = tmp_path / "t.xlsx"
-        sample.write(path)
-        assert read_sheet(path) == [
+    def test_assembled_grid_layout_on_disk(self, book, sample):
+        sample.write(book)
+        assert read_sheet(book) == [
             ["Metric", "North", "South", "East"],
             ["Revenue", "100", "200", "150"],
             ["Costs", "40", "60", "55"],
         ]
 
-    def test_read_without_row_labels(self, tmp_path):
-        path = tmp_path / "t.xlsx"
-        Table(
-            data=[["1", "2"]],
-            column_headers=["a", "b"],
-        ).write(path)
-        t = Table.read(path, row_labels=False)
+    def test_read_without_row_labels(self, book):
+        Table(data=[["1", "2"]], column_headers=["a", "b"]).write(book)
+        t = Table.read(book, row_labels=False)
         assert t.data.column_headers == ["a", "b"]
         assert t.data.row_labels == []
         assert t.data.rows == [["1", "2"]]
+
+    def test_write_to_missing_file_raises(self, tmp_path, sample):
+        with pytest.raises(FileNotFoundError):
+            sample.write(tmp_path / "nope.xlsx")
 
     def test_read_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             Table.read(tmp_path / "nope.xlsx")
 
-    def test_read_allows_a_file_with_duplicate_headers(self, tmp_path):
-        path = tmp_path / "messy.xlsx"
-        write_sheet(path, [["", "amount", "amount"], ["Jan", "10", "20"]])
-        t = Table.read(path)
+    def test_read_allows_a_file_with_duplicate_headers(self, book):
+        write_sheet(book, [["", "amount", "amount"], ["Jan", "10", "20"]])
+        t = Table.read(book)
         assert t.data.column_headers == ["amount", "amount"]
 
 
@@ -338,13 +335,12 @@ class TestRemoveAndRename:
 
 
 class TestMutationKeepsInvariants:
-    def test_edits_survive_a_round_trip(self, tmp_path, sample):
+    def test_edits_survive_a_round_trip(self, book, sample):
         # strings only, so the round trip is exact (read_sheet coerces to str)
         sample.set_cell(row="Revenue", column="North", value="111")
         sample.add_row("Profit", ["1", "2", "3"])
         sample.drop_column("South")
         sample.rename_row("Costs", "Expenses")
 
-        path = tmp_path / "edited.xlsx"
-        sample.write(path)
-        assert Table.read(path) == sample
+        sample.write(book)
+        assert Table.read(book) == sample

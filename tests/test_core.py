@@ -1,12 +1,13 @@
-"""Tests for core.py: read_sheet, write_sheet, append_rows."""
+"""Tests for core.py: create_file, read_sheet, write_sheet, append_rows, sheet mgmt."""
 
 from __future__ import annotations
 
 import pytest
-from openpyxl import Workbook, load_workbook
+from openpyxl import load_workbook
 
 from pyhandlexl.core import (
     append_rows,
+    create_file,
     create_sheet,
     delete_sheet,
     list_sheets,
@@ -15,191 +16,185 @@ from pyhandlexl.core import (
     sheet_exists,
     write_sheet,
 )
-from pyhandlexl.errors import SheetNameError, SheetNotFoundError
+from pyhandlexl.errors import DimensionError, SheetNameError, SheetNotFoundError
 
 
-class TestWriteThenRead:
-    def test_round_trip_on_new_file(self, tmp_path):
-        path = tmp_path / "out.xlsx"
-        write_sheet(path, [["a", "b"], ["c", "d"]])
-        assert read_sheet(path) == [["a", "b"], ["c", "d"]]
+class TestCreateFile:
+    def test_creates_empty_workbook(self, tmp_path):
+        path = tmp_path / "new.xlsx"
+        create_file(path)
+        assert list_sheets(path) == ["Sheet"]
+        assert read_sheet(path) == []
 
-    def test_new_file_has_only_the_written_sheet(self, tmp_path):
-        path = tmp_path / "out.xlsx"
-        write_sheet(path, [["x"]], sheet="Data")
-        assert load_workbook(path).sheetnames == ["Data"]
+    def test_custom_sheet_name(self, tmp_path):
+        path = tmp_path / "new.xlsx"
+        create_file(path, sheet="Data")
+        assert list_sheets(path) == ["Data"]
 
-    def test_values_are_returned_as_strings(self, tmp_path):
-        path = tmp_path / "out.xlsx"
-        write_sheet(path, [[1, 2.5, True, None]])
-        assert read_sheet(path) == [["1", "2.5", "True"]]  # trailing None trimmed
+    def test_existing_path_raises(self, book):
+        with pytest.raises(FileExistsError):
+            create_file(book)
 
-    def test_write_replaces_existing_content(self, tmp_path):
-        path = tmp_path / "out.xlsx"
-        write_sheet(path, [["old", "old", "old"], ["old", "old", "old"]])
-        write_sheet(path, [["new"]])
-        assert read_sheet(path) == [["new"]]
-
-    def test_other_sheets_are_preserved(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        wb = Workbook()
-        wb.active.title = "Keep"
-        wb.active["A1"] = "untouched"
-        wb.create_sheet("Target")
-        wb.save(path)
-
-        write_sheet(path, [["changed"]], sheet="Target")
-
-        result = load_workbook(path)
-        assert result["Keep"]["A1"].value == "untouched"
-        assert read_sheet(path, "Target") == [["changed"]]
+    def test_invalid_sheet_name_raises(self, tmp_path):
+        with pytest.raises(SheetNameError):
+            create_file(tmp_path / "new.xlsx", sheet="bad/name")
 
 
-class TestReadSheet:
-    def test_missing_file_raises(self, tmp_path):
+class TestFileMustExist:
+    def test_write_sheet_raises_when_absent(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            write_sheet(tmp_path / "nope.xlsx", [["a"]])
+
+    def test_append_rows_raises_when_absent(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            append_rows(tmp_path / "nope.xlsx", [["a"]])
+
+    def test_create_sheet_raises_when_absent(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            create_sheet(tmp_path / "nope.xlsx", "Data")
+
+    def test_read_sheet_raises_when_absent(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             read_sheet(tmp_path / "nope.xlsx")
 
-    def test_unknown_sheet_raises(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"]])
+
+class TestWriteThenRead:
+    def test_round_trip(self, book):
+        write_sheet(book, [["a", "b"], ["c", "d"]])
+        assert read_sheet(book) == [["a", "b"], ["c", "d"]]
+
+    def test_values_are_returned_as_strings(self, book):
+        write_sheet(book, [[1, 2.5, True, None]])
+        assert read_sheet(book) == [["1", "2.5", "True"]]  # trailing None trimmed
+
+    def test_write_replaces_existing_content(self, book):
+        write_sheet(book, [["old", "old", "old"], ["old", "old", "old"]])
+        write_sheet(book, [["new"]])
+        assert read_sheet(book) == [["new"]]
+
+    def test_writing_a_new_sheet_keeps_the_default_one(self, book):
+        write_sheet(book, [["x"]], sheet="Data")
+        assert load_workbook(book).sheetnames == ["Sheet", "Data"]
+
+    def test_other_sheets_are_preserved(self, book):
+        wb = load_workbook(book)
+        wb.active.title = "Keep"
+        wb.active["A1"] = "untouched"
+        wb.create_sheet("Target")
+        wb.save(book)
+
+        write_sheet(book, [["changed"]], sheet="Target")
+
+        result = load_workbook(book)
+        assert result["Keep"]["A1"].value == "untouched"
+        assert read_sheet(book, "Target") == [["changed"]]
+
+
+class TestReadSheet:
+    def test_unknown_sheet_raises(self, book):
+        write_sheet(book, [["a"]])
         with pytest.raises(SheetNotFoundError):
-            read_sheet(path, "Ghost")
+            read_sheet(book, "Ghost")
 
-    def test_trailing_empty_cells_are_trimmed(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a", "", ""], ["b", "c", ""]])
-        assert read_sheet(path) == [["a"], ["b", "c"]]
+    def test_trailing_empty_cells_are_trimmed(self, book):
+        write_sheet(book, [["a", "", ""], ["b", "c", ""]])
+        assert read_sheet(book) == [["a"], ["b", "c"]]
 
-    def test_pad_makes_result_rectangular(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"], ["b", "c", "d"]])
-        assert read_sheet(path, pad=True) == [["a", "", ""], ["b", "c", "d"]]
+    def test_pad_makes_result_rectangular(self, book):
+        write_sheet(book, [["a"], ["b", "c", "d"]])
+        assert read_sheet(book, pad=True) == [["a", "", ""], ["b", "c", "d"]]
 
 
 class TestOrientation:
-    def test_columns_orientation_transposes(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["h1", "h2"], ["v1", "v2"]], orientation="columns")
-        assert read_sheet(path) == [["h1", "v1"], ["h2", "v2"]]
+    def test_columns_orientation_transposes(self, book):
+        write_sheet(book, [["h1", "h2"], ["v1", "v2"]], orientation="columns")
+        assert read_sheet(book) == [["h1", "v1"], ["h2", "v2"]]
 
-    def test_invalid_orientation_raises(self, tmp_path):
+    def test_invalid_orientation_raises(self, book):
         with pytest.raises(ValueError):
-            write_sheet(tmp_path / "book.xlsx", [["a"]], orientation="sideways")
+            write_sheet(book, [["a"]], orientation="sideways")
 
 
 class TestAppendRows:
-    def test_appends_after_existing_rows(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"], ["b"]])
-        append_rows(path, [["c"], ["d"]])
-        assert read_sheet(path) == [["a"], ["b"], ["c"], ["d"]]
+    def test_appends_after_existing_rows(self, book):
+        write_sheet(book, [["a"], ["b"]])
+        append_rows(book, [["c"], ["d"]])
+        assert read_sheet(book) == [["a"], ["b"], ["c"], ["d"]]
 
-    def test_empty_rows_is_a_noop(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"]])
-        append_rows(path, [])
-        assert read_sheet(path) == [["a"]]
+    def test_empty_rows_is_a_noop(self, book):
+        write_sheet(book, [["a"]])
+        append_rows(book, [])
+        assert read_sheet(book) == [["a"]]
 
-    def test_creates_file_when_absent(self, tmp_path):
-        path = tmp_path / "fresh.xlsx"
-        append_rows(path, [["a"], ["b"]])
-        assert read_sheet(path) == [["a"], ["b"]]
+    def test_appends_to_an_empty_file(self, book):
+        append_rows(book, [["a"], ["b"]])
+        assert read_sheet(book) == [["a"], ["b"]]
 
 
 class TestDimensionGuard:
-    def test_too_many_columns_raises(self, tmp_path):
-        from pyhandlexl.errors import DimensionError
-
-        path = tmp_path / "book.xlsx"
+    def test_too_many_columns_raises(self, book):
         with pytest.raises(DimensionError):
-            write_sheet(path, [[""] * 16_385])
+            write_sheet(book, [[""] * 16_385])
 
 
 class TestSheetManagement:
-    def test_list_sheets(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        wb = Workbook()
+    def test_list_sheets(self, book):
+        wb = load_workbook(book)
         wb.active.title = "One"
         wb.create_sheet("Two")
-        wb.save(path)
-        assert list_sheets(path) == ["One", "Two"]
+        wb.save(book)
+        assert list_sheets(book) == ["One", "Two"]
 
     def test_list_sheets_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             list_sheets(tmp_path / "nope.xlsx")
 
-    def test_sheet_exists(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"]], sheet="Data")
-        assert sheet_exists(path, "Data") is True
-        assert sheet_exists(path, "Missing") is False
+    def test_sheet_exists(self, book):
+        create_sheet(book, "Data")
+        assert sheet_exists(book, "Data") is True
+        assert sheet_exists(book, "Missing") is False
 
-    def test_create_sheet_on_new_file(self, tmp_path):
-        path = tmp_path / "fresh.xlsx"
-        create_sheet(path, "Sales")
-        assert list_sheets(path) == ["Sales"]
+    def test_create_sheet_adds_to_existing(self, book):
+        create_sheet(book, "Extra")
+        assert list_sheets(book) == ["Sheet", "Extra"]
 
-    def test_create_sheet_appends_to_existing(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"]])  # default sheet "Sheet"
-        create_sheet(path, "Extra")
-        assert list_sheets(path) == ["Sheet", "Extra"]
-
-    def test_create_sheet_duplicate_raises(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"]], sheet="Data")
+    def test_create_sheet_duplicate_raises(self, book):
+        create_sheet(book, "Data")
         with pytest.raises(ValueError):
-            create_sheet(path, "Data")
+            create_sheet(book, "Data")
 
-    def test_create_sheet_invalid_name_raises(self, tmp_path):
+    def test_create_sheet_invalid_name_raises(self, book):
         with pytest.raises(SheetNameError):
-            create_sheet(tmp_path / "book.xlsx", "bad/name")
+            create_sheet(book, "bad/name")
 
-    def test_delete_sheet(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        wb = Workbook()
-        wb.create_sheet("Gone")
-        wb.save(path)
-        delete_sheet(path, "Gone")
-        assert sheet_exists(path, "Gone") is False
+    def test_delete_sheet(self, book):
+        create_sheet(book, "Gone")
+        delete_sheet(book, "Gone")
+        assert sheet_exists(book, "Gone") is False
 
-    def test_delete_missing_sheet_raises(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"]])
+    def test_delete_missing_sheet_raises(self, book):
         with pytest.raises(SheetNotFoundError):
-            delete_sheet(path, "Ghost")
+            delete_sheet(book, "Ghost")
 
-    def test_delete_last_sheet_raises(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"]])
+    def test_delete_last_sheet_raises(self, book):
         with pytest.raises(ValueError):
-            delete_sheet(path, list_sheets(path)[0])
+            delete_sheet(book, list_sheets(book)[0])
 
-    def test_rename_sheet(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"]], sheet="Old")
-        rename_sheet(path, "Old", "New")
-        assert list_sheets(path) == ["New"]
-        assert read_sheet(path, "New") == [["a"]]
+    def test_rename_sheet(self, book):
+        write_sheet(book, [["a"]], sheet="Sheet")
+        rename_sheet(book, "Sheet", "New")
+        assert list_sheets(book) == ["New"]
+        assert read_sheet(book, "New") == [["a"]]
 
-    def test_rename_missing_sheet_raises(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"]])
+    def test_rename_missing_sheet_raises(self, book):
         with pytest.raises(SheetNotFoundError):
-            rename_sheet(path, "Nope", "New")
+            rename_sheet(book, "Nope", "New")
 
-    def test_rename_to_existing_name_raises(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        wb = Workbook()
-        wb.active.title = "A"
-        wb.create_sheet("B")
-        wb.save(path)
+    def test_rename_to_existing_name_raises(self, book):
+        create_sheet(book, "B")
         with pytest.raises(ValueError):
-            rename_sheet(path, "A", "B")
+            rename_sheet(book, "Sheet", "B")
 
-    def test_rename_invalid_name_raises(self, tmp_path):
-        path = tmp_path / "book.xlsx"
-        write_sheet(path, [["a"]], sheet="Old")
+    def test_rename_invalid_name_raises(self, book):
         with pytest.raises(SheetNameError):
-            rename_sheet(path, "Old", "x" * 32)
+            rename_sheet(book, "Sheet", "x" * 32)
