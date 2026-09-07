@@ -9,11 +9,14 @@ from typing import Literal
 
 from openpyxl import Workbook
 
-from pyhandlexl._safety import atomic_save, safe_load
+from pyhandlexl._safety import atomic_save, safe_delete, safe_load
 from pyhandlexl.errors import SheetNotFoundError
 from pyhandlexl.validate import check_dimensions, check_sheet_name
 
 Orientation = Literal["rows", "columns"]
+
+# Extensions openpyxl recognises as Excel workbooks.
+_WORKBOOK_SUFFIXES = frozenset({".xlsx", ".xlsm", ".xltx", ".xltm"})
 
 
 def _cell_to_str(value: object) -> str:
@@ -42,6 +45,20 @@ def create_workbook(path: str | Path, *, sheet: str = "Sheet") -> None:
         atomic_save(workbook, path)
     finally:
         workbook.close()
+
+
+def delete_workbook(path: str | Path) -> None:
+    """Delete a workbook file, retrying while it is locked.
+
+    Raises:
+        ValueError: *path* does not name an Excel workbook (.xlsx/.xlsm/.xltx/.xltm).
+        FileNotFoundError: no file at *path*.
+        FileLockedError: the file stayed locked (open in Excel) through every retry.
+    """
+    path = Path(path)
+    if path.suffix.lower() not in _WORKBOOK_SUFFIXES:
+        raise ValueError(f"not a workbook path (need one of {sorted(_WORKBOOK_SUFFIXES)}): {path}")
+    safe_delete(path)
 
 
 def read_sheet(

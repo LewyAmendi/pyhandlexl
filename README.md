@@ -217,13 +217,16 @@ so the call site says what's being checked: `len(t.data.rows)`,
 typo in a path can't silently produce a stray workbook.
 
 ```python
-create_workbook(path, *, sheet="Sheet")
+create_workbook(path, *, sheet="Sheet")   # FileExistsError if the path is taken
+delete_workbook(path)                      # FileNotFoundError if it isn't there
 ```
 
-Creates a new empty `.xlsx` with one worksheet. `FileExistsError` if something
-is already at `path`. Every write operation — `write_sheet`, `append_rows`,
-`create_sheet`, `Table.write` — raises `FileNotFoundError` if the file does not
-exist yet.
+`create_workbook` makes a new empty `.xlsx` with one worksheet. `delete_workbook`
+removes a workbook file, retrying while it is locked (open in Excel) before
+raising `FileLockedError`, and refuses a path that isn't an Excel extension.
+
+Every write operation — `write_sheet`, `append_rows`, `create_sheet`,
+`Table.write` — raises `FileNotFoundError` if the file does not exist yet.
 
 ## The raw layer
 

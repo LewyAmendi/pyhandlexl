@@ -10,6 +10,7 @@ from pyhandlexl.core import (
     create_sheet,
     create_workbook,
     delete_sheet,
+    delete_workbook,
     list_sheets,
     read_sheet,
     rename_sheet,
@@ -19,7 +20,7 @@ from pyhandlexl.core import (
 from pyhandlexl.errors import DimensionError, SheetNameError, SheetNotFoundError
 
 
-class TestCreateFile:
+class TestCreateWorkbook:
     def test_creates_empty_workbook(self, tmp_path):
         path = tmp_path / "new.xlsx"
         create_workbook(path)
@@ -38,6 +39,23 @@ class TestCreateFile:
     def test_invalid_sheet_name_raises(self, tmp_path):
         with pytest.raises(SheetNameError):
             create_workbook(tmp_path / "new.xlsx", sheet="bad/name")
+
+
+class TestDeleteWorkbook:
+    def test_deletes_the_file(self, book):
+        delete_workbook(book)
+        assert not book.exists()
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            delete_workbook(tmp_path / "nope.xlsx")
+
+    def test_non_workbook_path_raises(self, tmp_path):
+        txt = tmp_path / "notes.txt"
+        txt.write_text("keep me")
+        with pytest.raises(ValueError):
+            delete_workbook(txt)
+        assert txt.exists()
 
 
 class TestFileMustExist:

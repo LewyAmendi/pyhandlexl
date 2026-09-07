@@ -73,6 +73,24 @@ def safe_load(
     return _retry(lambda: load_workbook(path), path=path, retries=retries, delay=delay)
 
 
+def safe_delete(
+    path: str | Path,
+    *,
+    retries: int = DEFAULT_RETRIES,
+    delay: float = DEFAULT_DELAY,
+) -> None:
+    """Delete a file, retrying while it is locked.
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        FileLockedError: the file stayed locked through every retry.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"no file at {path}")
+    _retry(path.unlink, path=path, retries=retries, delay=delay)
+
+
 def atomic_save(
     workbook: Workbook,
     path: str | Path,

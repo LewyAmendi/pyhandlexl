@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `create_workbook(path, *, sheet="Sheet")` — the only way to create a new
   `.xlsx` file.
+- `delete_workbook(path)` — delete a workbook file, retrying while it is locked
+  (`FileLockedError` if it stays open); refuses non-workbook paths.
 - `pyhandlexl.grid` — editing helpers for the `list[list[str]]` that
   `read_sheet` returns: `set_value`, `get_row`/`get_column`, `set_row`/
   `set_column`, `insert_row`/`insert_column`, `append_row`/`append_column`,
