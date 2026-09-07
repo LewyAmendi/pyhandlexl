@@ -8,7 +8,7 @@ import pytest
 from openpyxl import Workbook, load_workbook
 
 import pyhandlexl._safety as safety
-from pyhandlexl._safety import atomic_save, safe_load
+from pyhandlexl._safety import atomic_save, safe_delete, safe_load
 from pyhandlexl.errors import FileLockedError, InvalidFileError
 
 
@@ -54,6 +54,29 @@ class TestRetry:
         with pytest.raises(ValueError):
             safety._retry(boom, path=Path("x.xlsx"), retries=5)
         assert len(attempts) == 1
+
+
+class TestSafeDelete:
+    def test_deletes_the_file(self, tmp_path):
+        p = tmp_path / "wb.xlsx"
+        _make_workbook(p)
+        safe_delete(p)
+        assert not p.exists()
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            safe_delete(tmp_path / "nope.xlsx")
+
+    def test_locked_file_retries_then_raises(self, tmp_path, monkeypatch):
+        p = tmp_path / "wb.xlsx"
+        _make_workbook(p)
+
+        def locked_unlink(self):
+            raise PermissionError("open in Excel")
+
+        monkeypatch.setattr(Path, "unlink", locked_unlink)
+        with pytest.raises(FileLockedError):
+            safe_delete(p)
 
 
 class TestSafeLoad:

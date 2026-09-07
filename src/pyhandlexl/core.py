@@ -9,11 +9,14 @@ from typing import Literal
 
 from openpyxl import Workbook
 
-from pyhandlexl._safety import atomic_save, safe_load
+from pyhandlexl._safety import atomic_save, safe_delete, safe_load
 from pyhandlexl.errors import SheetNotFoundError
 from pyhandlexl.validate import check_dimensions, check_sheet_name
 
 Orientation = Literal["rows", "columns"]
+
+# Extensions openpyxl recognises as Excel workbooks.
+_WORKBOOK_SUFFIXES = frozenset({".xlsx", ".xlsm", ".xltx", ".xltm"})
 
 
 def _cell_to_str(value: object) -> str:
@@ -21,7 +24,7 @@ def _cell_to_str(value: object) -> str:
     return "" if value is None else str(value)
 
 
-def create_file(path: str | Path, *, sheet: str = "Sheet") -> None:
+def create_workbook(path: str | Path, *, sheet: str = "Sheet") -> None:
     """Create a new empty .xlsx file with one worksheet.
 
     Files are never created implicitly — call this first. ``write_sheet``,
@@ -42,6 +45,20 @@ def create_file(path: str | Path, *, sheet: str = "Sheet") -> None:
         atomic_save(workbook, path)
     finally:
         workbook.close()
+
+
+def delete_workbook(path: str | Path) -> None:
+    """Delete a workbook file, retrying while it is locked.
+
+    Raises:
+        ValueError: *path* does not name an Excel workbook (.xlsx/.xlsm/.xltx/.xltm).
+        FileNotFoundError: no file at *path*.
+        FileLockedError: the file stayed locked (open in Excel) through every retry.
+    """
+    path = Path(path)
+    if path.suffix.lower() not in _WORKBOOK_SUFFIXES:
+        raise ValueError(f"not a workbook path (need one of {sorted(_WORKBOOK_SUFFIXES)}): {path}")
+    safe_delete(path)
 
 
 def read_sheet(
@@ -100,7 +117,7 @@ def write_sheet(
     """Replace a worksheet's contents with *rows*.
 
     Other worksheets in the file are left untouched. *sheet* is added if it
-    does not exist. The file must already exist (see :func:`create_file`).
+    does not exist. The file must already exist (see :func:`create_workbook`).
 
     Values are written as-is (``str``, ``int``, ``float``, ``bool``); ``None``
     leaves the cell empty. No string-to-number conversion is performed.
@@ -155,7 +172,7 @@ def append_rows(
     """Append *rows* to the end of a worksheet.
 
     *sheet* is added if it does not exist. An empty *rows* is a no-op. The file
-    must already exist (see :func:`create_file`). Values follow the same rules
+    must already exist (see :func:`create_workbook`). Values follow the same rules
     as :func:`write_sheet`.
 
     Raises:
@@ -211,7 +228,7 @@ def sheet_exists(path: str | Path, name: str) -> bool:
 def create_sheet(path: str | Path, name: str) -> None:
     """Add an empty worksheet called *name*.
 
-    The file must already exist (see :func:`create_file`).
+    The file must already exist (see :func:`create_workbook`).
 
     Raises:
         FileNotFoundError: no file at *path*.

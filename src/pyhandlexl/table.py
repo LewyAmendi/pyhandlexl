@@ -372,7 +372,7 @@ class Table:
         """Write the table to *path*, reassembling headers into row 1 and labels into column A.
 
         The file must already exist — create it first with
-        :func:`pyhandlexl.create_file` (``FileNotFoundError`` otherwise).
+        :func:`pyhandlexl.create_workbook` (``FileNotFoundError`` otherwise).
         """
         write_sheet(path, self._assemble(), sheet)
 

@@ -3,9 +3,10 @@
 from pyhandlexl import grid
 from pyhandlexl.core import (
     append_rows,
-    create_file,
     create_sheet,
+    create_workbook,
     delete_sheet,
+    delete_workbook,
     list_sheets,
     read_sheet,
     rename_sheet,
@@ -37,9 +38,10 @@ __all__ = [
     "append_rows",
     "check_dimensions",
     "check_sheet_name",
-    "create_file",
     "create_sheet",
+    "create_workbook",
     "delete_sheet",
+    "delete_workbook",
     "grid",
     "is_valid_xlsx",
     "list_sheets",
