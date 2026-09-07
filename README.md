@@ -69,9 +69,9 @@ Starting from scratch? Create the file first — `pyhandlexl` never creates one
 implicitly:
 
 ```python
-from pyhandlexl import create_file, Table
+from pyhandlexl import create_workbook, Table
 
-create_file("new.xlsx")
+create_workbook("new.xlsx")
 Table(data=[[10, 20]], column_headers=["q1", "q2"], row_labels=["Alice"]).write("new.xlsx")
 ```
 
@@ -183,11 +183,11 @@ duplicate an existing label/header, raise `ValueError`; unknown labels raise
 You can also build a table from nothing:
 
 ```python
-from pyhandlexl import create_file, Table
+from pyhandlexl import create_workbook, Table
 
 t = Table([], column_headers=["q1", "q2"])
 t.add_row("Alice", [10, 20])
-create_file("new.xlsx")
+create_workbook("new.xlsx")
 t.write("new.xlsx")
 ```
 
@@ -217,7 +217,7 @@ so the call site says what's being checked: `len(t.data.rows)`,
 typo in a path can't silently produce a stray workbook.
 
 ```python
-create_file(path, *, sheet="Sheet")
+create_workbook(path, *, sheet="Sheet")
 ```
 
 Creates a new empty `.xlsx` with one worksheet. `FileExistsError` if something
@@ -300,7 +300,7 @@ delete_sheet(path, "Old")         # refuses to delete the last sheet
 rename_sheet(path, "Old", "New")
 ```
 
-`create_sheet` needs an existing file (`create_file` first). Sheet names are
+`create_sheet` needs an existing file (`create_workbook` first). Sheet names are
 validated everywhere: max 31 characters, none of `\ / ? * [ ] :`, and
 `"History"` is reserved by Excel.
 

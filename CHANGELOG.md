@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.0] — 2026-09-07
 
 ### Added
-- `create_file(path, *, sheet="Sheet")` — the only way to create a workbook.
+- `create_workbook(path, *, sheet="Sheet")` — the only way to create a new
+  `.xlsx` file.
 - `pyhandlexl.grid` — editing helpers for the `list[list[str]]` that
   `read_sheet` returns: `set_value`, `get_row`/`get_column`, `set_row`/
   `set_column`, `insert_row`/`insert_column`, `append_row`/`append_column`,
@@ -20,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Files are never created implicitly.** `write_sheet`, `append_rows`,
   `create_sheet`, and `Table.write` now raise `FileNotFoundError` if the file
-  does not exist — call `create_file` first.
+  does not exist — call `create_workbook` first.
 
 ## [0.2.3] — 2026-09-05
 
