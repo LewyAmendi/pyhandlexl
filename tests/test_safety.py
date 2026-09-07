@@ -8,7 +8,7 @@ import pytest
 from openpyxl import Workbook, load_workbook
 
 import pyhandlexl._safety as safety
-from pyhandlexl._safety import atomic_save, load_or_create, safe_load
+from pyhandlexl._safety import atomic_save, safe_load
 from pyhandlexl.errors import FileLockedError, InvalidFileError
 
 
@@ -71,16 +71,6 @@ class TestSafeLoad:
         p.write_text("not a workbook")
         with pytest.raises(InvalidFileError):
             safe_load(p)
-
-
-class TestLoadOrCreate:
-    def test_returns_new_workbook_when_absent(self, tmp_path):
-        assert isinstance(load_or_create(tmp_path / "fresh.xlsx"), Workbook)
-
-    def test_loads_when_present(self, tmp_path):
-        p = tmp_path / "wb.xlsx"
-        _make_workbook(p, a1="existing")
-        assert load_or_create(p).active["A1"].value == "existing"
 
 
 class TestAtomicSave:

@@ -1,7 +1,9 @@
-"""pyhandlexl — read and write raw cell values in Excel .xlsx files."""
+"""pyhandlexl — read and write Excel .xlsx worksheets as organised, labelled tables."""
 
+from pyhandlexl import grid
 from pyhandlexl.core import (
     append_rows,
+    create_file,
     create_sheet,
     delete_sheet,
     list_sheets,
@@ -21,7 +23,7 @@ from pyhandlexl.errors import (
 from pyhandlexl.table import Table, TableData
 from pyhandlexl.validate import check_dimensions, check_sheet_name, is_valid_xlsx
 
-__version__ = "0.2.3"
+__version__ = "0.3.0"
 
 __all__ = [
     "DimensionError",
@@ -35,8 +37,10 @@ __all__ = [
     "append_rows",
     "check_dimensions",
     "check_sheet_name",
+    "create_file",
     "create_sheet",
     "delete_sheet",
+    "grid",
     "is_valid_xlsx",
     "list_sheets",
     "read_sheet",

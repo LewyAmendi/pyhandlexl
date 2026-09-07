@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-07
+
+### Added
+- `create_file(path, *, sheet="Sheet")` — the only way to create a workbook.
+- `pyhandlexl.grid` — editing helpers for the `list[list[str]]` that
+  `read_sheet` returns: `set_value`, `get_row`/`get_column`, `set_row`/
+  `set_column`, `insert_row`/`insert_column`, `append_row`/`append_column`,
+  `delete_row`/`delete_column`, `transpose`, `pad`. Each returns a new grid;
+  rows and columns are 1-based, matching `Table`.
+
+### Changed
+- **Files are never created implicitly.** `write_sheet`, `append_rows`,
+  `create_sheet`, and `Table.write` now raise `FileNotFoundError` if the file
+  does not exist — call `create_file` first.
+
 ## [0.2.3] — 2026-09-05
 
 ### Added
@@ -82,7 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.1.0...v0.2.0
