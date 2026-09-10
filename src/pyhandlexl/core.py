@@ -1,4 +1,4 @@
-"""Public functions for reading and writing whole sheets of raw values."""
+"""Public functions for reading and writing worksheets, preserving cell types."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from openpyxl import Workbook
 
 from pyhandlexl._safety import atomic_save, safe_delete, safe_load
 from pyhandlexl.errors import SheetNotFoundError
-from pyhandlexl.validate import check_dimensions, check_sheet_name
+from pyhandlexl.validate import check_cell_value, check_dimensions, check_sheet_name
 
 Orientation = Literal["rows", "columns"]
 
@@ -19,9 +19,13 @@ Orientation = Literal["rows", "columns"]
 _WORKBOOK_SUFFIXES = frozenset({".xlsx", ".xlsm", ".xltx", ".xltm"})
 
 
-def _cell_to_str(value: object) -> str:
-    """Coerce a cell value to a string; ``None`` becomes ``""``."""
-    return "" if value is None else str(value)
+def _checked_grid(rows: Iterable[Iterable[object]]) -> list[list[object]]:
+    """Materialise *rows* into a grid, raising CellTypeError on any bad value."""
+    grid = [list(row) for row in rows]
+    for row in grid:
+        for value in row:
+            check_cell_value(value)
+    return grid
 
 
 def create_workbook(path: str | Path, *, sheet: str = "Sheet") -> None:
@@ -66,16 +70,18 @@ def read_sheet(
     sheet: str | None = None,
     *,
     pad: bool = False,
-) -> list[list[str]]:
-    """Read a worksheet as a list of rows of strings.
+) -> list[list[object]]:
+    """Read a worksheet as a list of rows, keeping each value's type.
 
-    Every value is converted to ``str``; empty cells become ``""``. Trailing
-    empty cells are trimmed from each row, so a fully empty row becomes ``[]``.
+    Values come back as ``str``, ``int``, ``float``, ``bool``, ``datetime``,
+    ``date``, ``time``, or ``timedelta``. An empty cell is ``None``. Trailing
+    ``None`` values are trimmed from each row, so a fully empty row becomes
+    ``[]``.
 
     Args:
         path: the .xlsx file.
         sheet: worksheet name, or ``None`` for the active sheet.
-        pad: if true, right-pad every row with ``""`` to the length of the
+        pad: if true, right-pad every row with ``None`` to the length of the
             longest row, making the result rectangular.
 
     Raises:
@@ -92,10 +98,10 @@ def read_sheet(
         else:
             raise SheetNotFoundError(sheet)
 
-        rows: list[list[str]] = []
+        rows: list[list[object]] = []
         for raw_row in worksheet.iter_rows(values_only=True):
-            row = [_cell_to_str(value) for value in raw_row]
-            while row and row[-1] == "":
+            row = list(raw_row)
+            while row and row[-1] is None:
                 row.pop()
             rows.append(row)
     finally:
@@ -103,7 +109,7 @@ def read_sheet(
 
     if pad and rows:
         width = max(len(row) for row in rows)
-        rows = [row + [""] * (width - len(row)) for row in rows]
+        rows = [row + [None] * (width - len(row)) for row in rows]
     return rows
 
 
@@ -119,8 +125,9 @@ def write_sheet(
     Other worksheets in the file are left untouched. *sheet* is added if it
     does not exist. The file must already exist (see :func:`create_workbook`).
 
-    Values are written as-is (``str``, ``int``, ``float``, ``bool``); ``None``
-    leaves the cell empty. No string-to-number conversion is performed.
+    Values are written with their type preserved — no conversion. ``None``
+    leaves the cell empty. Every value must be a type Excel can store (see
+    :func:`pyhandlexl.check_cell_value`).
 
     Args:
         path: the .xlsx file.
@@ -132,15 +139,16 @@ def write_sheet(
     Raises:
         FileNotFoundError: no file at *path*.
         SheetNameError: *sheet* is not a valid worksheet name.
+        CellTypeError: a value is not a type Excel can store.
         DimensionError: the data exceeds the .xlsx row or column limits.
         ValueError: *orientation* is not ``"rows"`` or ``"columns"``.
     """
     if orientation not in ("rows", "columns"):
         raise ValueError(f"orientation must be 'rows' or 'columns', got {orientation!r}")
 
-    grid = [list(row) for row in rows]
+    grid = _checked_grid(rows)
     if orientation == "columns":
-        grid = [list(column) for column in zip_longest(*grid, fillvalue="")]
+        grid = [list(column) for column in zip_longest(*grid, fillvalue=None)]
 
     check_dimensions(len(grid), max((len(row) for row in grid), default=0))
 
@@ -178,9 +186,10 @@ def append_rows(
     Raises:
         FileNotFoundError: no file at *path*.
         SheetNameError: *sheet* is not a valid worksheet name.
+        CellTypeError: a value is not a type Excel can store.
         DimensionError: appending would exceed the .xlsx row or column limits.
     """
-    grid = [list(row) for row in rows]
+    grid = _checked_grid(rows)
     if not grid:
         return
 

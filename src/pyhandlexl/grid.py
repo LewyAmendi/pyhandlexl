@@ -7,7 +7,7 @@ input is never modified — so calls compose:
 
 Rows and columns are addressed with 1-based, Excel-style numbers (row 1 is the
 first row), matching ``Table``. Ragged rows are handled: column operations pad
-short rows with ``""`` as needed.
+short rows with ``None`` as needed.
 """
 
 from __future__ import annotations
@@ -48,10 +48,10 @@ def get_row(grid: Iterable[Iterable[object]], row: int) -> list[object]:
 
 
 def get_column(grid: Iterable[Iterable[object]], col: int) -> list[object]:
-    """Return column *col* (1-based) as a list; short rows contribute ``""``."""
+    """Return column *col* (1-based) as a list; short rows contribute ``None``."""
     grid = _copy(grid)
     _check_column(grid, col)
-    return [row[col - 1] if col - 1 < len(row) else "" for row in grid]
+    return [row[col - 1] if col - 1 < len(row) else None for row in grid]
 
 
 # ------------------------------------------------------------------- editing
@@ -64,7 +64,7 @@ def set_value(grid: Iterable[Iterable[object]], row: int, col: int, value: objec
     _check_column(out, col)
     target = out[row - 1]
     if len(target) < col:
-        target.extend([""] * (col - len(target)))
+        target.extend([None] * (col - len(target)))
     target[col - 1] = value
     return out
 
@@ -89,7 +89,7 @@ def set_column(grid: Iterable[Iterable[object]], col: int, values: Iterable[obje
         raise ValueError(f"expected {len(out)} values, got {len(values)}")
     for row, value in zip(out, values, strict=True):
         if len(row) < col:
-            row.extend([""] * (col - len(row)))
+            row.extend([None] * (col - len(row)))
         row[col - 1] = value
     return out
 
@@ -114,7 +114,7 @@ def insert_column(grid: Iterable[Iterable[object]], col: int, values: Iterable[o
         raise ValueError(f"expected {len(out)} values, got {len(values)}")
     for row, value in zip(out, values, strict=True):
         if len(row) < col - 1:
-            row.extend([""] * (col - 1 - len(row)))
+            row.extend([None] * (col - 1 - len(row)))
         row.insert(col - 1, value)
     return out
 
@@ -163,18 +163,18 @@ def delete_column(grid: Iterable[Iterable[object]], col: int) -> Grid:
 
 
 def pad(grid: Iterable[Iterable[object]]) -> Grid:
-    """Return a new rectangular grid, every row right-padded with ``""``."""
+    """Return a new rectangular grid, every row right-padded with ``None``."""
     out = _copy(grid)
     width = _width(out)
     for row in out:
-        row.extend([""] * (width - len(row)))
+        row.extend([None] * (width - len(row)))
     return out
 
 
 def transpose(grid: Iterable[Iterable[object]]) -> Grid:
     """Return the grid with rows and columns swapped.
 
-    Ragged rows are padded with ``""`` before transposing.
+    Ragged rows are padded with ``None`` before transposing.
     """
     out = pad(grid)
     if not out:

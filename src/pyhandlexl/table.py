@@ -2,8 +2,9 @@
 
 Layout convention: row 1 holds the column headers, column A holds the row
 labels, cell A1 is the "corner", and the data region is everything from B2
-onward. Row labels and column headers are always strings. Positional access
-uses Excel coordinates (row 1 is the header row, column 1 is the label column).
+onward. Row labels, column headers, and the corner are always strings; data
+values keep their type. Positional access uses Excel coordinates (row 1 is the
+header row, column 1 is the label column).
 """
 
 from __future__ import annotations
@@ -17,6 +18,11 @@ from openpyxl.utils import coordinate_to_tuple
 from pyhandlexl.core import read_sheet, write_sheet
 
 
+def _to_label(value: object) -> str:
+    """Coerce a header/label/corner cell to ``str``; an empty cell becomes ``""``."""
+    return "" if value is None else str(value)
+
+
 @dataclass(frozen=True)
 class TableData:
     """A read-only snapshot of a Table's content."""
@@ -25,7 +31,7 @@ class TableData:
     columns: list[list[object]]
     row_labels: list[str]
     column_headers: list[str]
-    corner: object
+    corner: str
 
 
 class Table:
@@ -41,12 +47,12 @@ class Table:
         data: Iterable[Iterable[object]],
         column_headers: Iterable[str] = (),
         row_labels: Iterable[str] = (),
-        corner: object = "",
+        corner: str = "",
     ) -> None:
         self._data: list[list[object]] = [list(row) for row in data]
         self._column_headers: list[str] = list(column_headers)
         self._row_labels: list[str] = list(row_labels)
-        self._corner: object = corner
+        self._corner: str = corner
         self._validate()
 
     def _validate(self) -> None:
@@ -58,6 +64,9 @@ class Table:
                 raise TypeError(
                     f"column headers must be str, got {type(header).__name__}: {header!r}"
                 )
+        if not isinstance(self._corner, str):
+            got = type(self._corner).__name__
+            raise TypeError(f"corner must be str, got {got}: {self._corner!r}")
         if self._row_labels and len(self._row_labels) != len(self._data):
             raise ValueError(f"{len(self._data)} data rows but {len(self._row_labels)} row labels")
         if self._column_headers:
@@ -94,9 +103,9 @@ class Table:
         row_start = 1 if column_headers else 0
         col_start = 1 if row_labels else 0
 
-        corner = grid[0][0] if (column_headers and row_labels) else ""
-        headers = grid[0][col_start:] if column_headers else []
-        labels = [grid[r][0] for r in range(row_start, len(grid))] if row_labels else []
+        corner = _to_label(grid[0][0]) if (column_headers and row_labels) else ""
+        headers = [_to_label(h) for h in grid[0][col_start:]] if column_headers else []
+        labels = [_to_label(grid[r][0]) for r in range(row_start, len(grid))] if row_labels else []
         data = [grid[r][col_start:] for r in range(row_start, len(grid))]
 
         return cls(data, headers, labels, corner)
@@ -104,20 +113,24 @@ class Table:
     # ------------------------------------------------------------ properties
 
     @property
-    def corner(self) -> object:
-        """The value of cell A1. Settable — this is how you change it."""
+    def corner(self) -> str:
+        """The value of cell A1 (always ``str``). Settable — this is how you change it."""
         return self._corner
 
     @corner.setter
-    def corner(self, value: object) -> None:
+    def corner(self, value: str) -> None:
+        if not isinstance(value, str):
+            raise TypeError(f"corner must be str, got {type(value).__name__}: {value!r}")
         self._corner = value
 
     @property
     def data(self) -> TableData:
         """A snapshot of the table's rows, columns, row labels, column headers, and corner."""
+        width = max((len(row) for row in self._data), default=0)
+        padded = [row + [None] * (width - len(row)) for row in self._data]
         return TableData(
             rows=[list(row) for row in self._data],
-            columns=[list(column) for column in zip(*self._data, strict=True)],
+            columns=[list(column) for column in zip(*padded, strict=True)],
             row_labels=list(self._row_labels),
             column_headers=list(self._column_headers),
             corner=self._corner,
@@ -373,6 +386,8 @@ class Table:
 
         The file must already exist — create it first with
         :func:`pyhandlexl.create_workbook` (``FileNotFoundError`` otherwise).
+        Every data value must be a type Excel can store (``CellTypeError``
+        otherwise) — the check happens here, not when values are set.
         """
         write_sheet(path, self._assemble(), sheet)
 

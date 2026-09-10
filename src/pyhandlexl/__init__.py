@@ -14,6 +14,7 @@ from pyhandlexl.core import (
     write_sheet,
 )
 from pyhandlexl.errors import (
+    CellTypeError,
     DimensionError,
     FileLockedError,
     InvalidFileError,
@@ -22,11 +23,17 @@ from pyhandlexl.errors import (
     SheetNotFoundError,
 )
 from pyhandlexl.table import Table, TableData
-from pyhandlexl.validate import check_dimensions, check_sheet_name, is_valid_xlsx
+from pyhandlexl.validate import (
+    check_cell_value,
+    check_dimensions,
+    check_sheet_name,
+    is_valid_xlsx,
+)
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
+    "CellTypeError",
     "DimensionError",
     "FileLockedError",
     "InvalidFileError",
@@ -36,6 +43,7 @@ __all__ = [
     "Table",
     "TableData",
     "append_rows",
+    "check_cell_value",
     "check_dimensions",
     "check_sheet_name",
     "create_sheet",

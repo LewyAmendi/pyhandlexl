@@ -3,6 +3,7 @@
 import pytest
 
 from pyhandlexl.errors import (
+    CellTypeError,
     DimensionError,
     FileLockedError,
     InvalidFileError,
@@ -19,8 +20,14 @@ def test_all_errors_derive_from_base():
         InvalidFileError,
         FileLockedError,
         SheetNotFoundError,
+        CellTypeError,
     ):
         assert issubclass(exc, PyhandlexlError)
+
+
+def test_cell_type_error_can_be_caught_as_type_error():
+    with pytest.raises(TypeError):
+        raise CellTypeError("list is not a type Excel can store")
 
 
 def test_file_locked_error_can_be_caught_as_oserror():
