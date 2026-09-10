@@ -1,13 +1,14 @@
-"""Validation helpers: sheet names, data dimensions, and file integrity."""
+"""Validation helpers: sheet names, data dimensions, cell types, file integrity."""
 
 from __future__ import annotations
 
+import datetime as dt
 import zipfile
 from pathlib import Path
 
 from openpyxl import load_workbook
 
-from pyhandlexl.errors import DimensionError, SheetNameError
+from pyhandlexl.errors import CellTypeError, DimensionError, SheetNameError
 
 # Excel's hard limits for the .xlsx format.
 MAX_ROWS = 1_048_576
@@ -19,6 +20,10 @@ ILLEGAL_SHEET_CHARS = frozenset(r"\/?*[]:")
 # Files every valid .xlsx zip must contain.
 _REQUIRED_PARTS = frozenset({"xl/workbook.xml", "[Content_Types].xml"})
 
+# The value types Excel can store in a cell. ``bool`` is covered by ``int`` and
+# ``datetime`` by ``date``; ``None`` means an empty cell.
+_CELL_TYPES = (str, int, float, dt.date, dt.time, dt.timedelta)
+
 
 def check_dimensions(n_rows: int, n_cols: int) -> None:
     """Raise DimensionError if a grid of this size won't fit in an .xlsx sheet."""
@@ -26,6 +31,22 @@ def check_dimensions(n_rows: int, n_cols: int) -> None:
         raise DimensionError(f"{n_rows} rows exceeds the .xlsx limit of {MAX_ROWS}")
     if n_cols > MAX_COLUMNS:
         raise DimensionError(f"{n_cols} columns exceeds the .xlsx limit of {MAX_COLUMNS}")
+
+
+def check_cell_value(value: object) -> None:
+    """Raise CellTypeError if *value* is not a type Excel can store in a cell.
+
+    Allowed: ``str``, ``int``, ``float``, ``bool``, ``datetime``, ``date``,
+    ``time``, ``timedelta``, and ``None`` (an empty cell). Timezone-aware
+    datetimes are rejected — Excel has no concept of a timezone.
+    """
+    if value is None or isinstance(value, _CELL_TYPES):
+        if isinstance(value, (dt.datetime, dt.time)) and value.tzinfo is not None:
+            raise CellTypeError(
+                f"{type(value).__name__} must be timezone-naive; Excel has no timezone concept"
+            )
+        return
+    raise CellTypeError(f"{type(value).__name__} is not a type Excel can store: {value!r}")
 
 
 def check_sheet_name(sheet_name: str) -> None:

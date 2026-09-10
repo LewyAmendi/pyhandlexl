@@ -20,7 +20,7 @@ than where it sits.
 from pyhandlexl import Table
 
 t = Table.read("budget.xlsx")
-t.read_cell(row="Revenue", column="North")   # by name, not "B2"
+t.read_cell(row="Revenue", column="North")   # 4200  — by name, and typed
 t.add_row("Q3", [120, 90, 60])
 t.write("budget.xlsx")                        # safe, atomic write
 ```
@@ -56,9 +56,9 @@ from pyhandlexl import Table
 
 t = Table.read("budget.xlsx")
 
-t.read_cell(row="Alice", column="q2")   # '20'
-t.read_row("Bob")                       # ['30', '40']
-t.read_column("q1")                     # ['10', '30']
+t.read_cell(row="Alice", column="q2")   # 20     (int)
+t.read_row("Bob")                       # [30, 40]
+t.read_column("q1")                     # [10, 30]
 
 t.set_cell(row="Alice", column="q1", value=99)   # edit in place
 t.add_row("Carol", [1, 2])
@@ -75,8 +75,13 @@ create_workbook("new.xlsx")
 Table(data=[[10, 20]], column_headers=["q1", "q2"], row_labels=["Alice"]).write("new.xlsx")
 ```
 
-> **Values are always strings.** `read_sheet` and `Table` coerce every cell to
-> `str` (empty cells become `""`). Convert to numbers yourself where you need to.
+> **Values keep their type.** `read_sheet` and `Table` return each cell as its
+> native Python type — `str`, `int`, `float`, `bool`, `datetime`, `date`,
+> `time`, `timedelta` — and an empty cell as `None`. Writing preserves type
+> too; a value that isn't one of those raises `CellTypeError`. **Row labels,
+> column headers, and the corner are the exception** — they are always coerced
+> to `str`, since you address rows and columns by name. See
+> [round-trip notes](#round-trip-notes) for the small type changes Excel forces.
 
 ## The `Table` class
 
@@ -96,8 +101,10 @@ Table.read(path, sheet=None, *, column_headers=True, row_labels=True)
 - `column_headers=False` — row 1 is ordinary data, `column_headers` is empty.
 - `row_labels=False` — column A is ordinary data, `row_labels` is empty.
 
-Row labels and column headers are always `str` — required if you build a
-`Table` by hand, too (`Table(..., column_headers=[1, 2])` raises `TypeError`).
+Row labels, column headers, and the corner are always `str`. Reading a sheet
+with a numeric header (`2024`) coerces it to `"2024"`; building a `Table` by
+hand with a non-`str` label/header/corner raises `TypeError`. Data values keep
+their type.
 
 ### The whole table at once
 
@@ -108,11 +115,11 @@ t.data         # a TableData snapshot
 
 ```python
 d = t.data
-d.rows              # [['10', '20'], ['30', '40']]   (B2 onward, by row)
-d.columns           # [['10', '30'], ['20', '40']]   (same data, by column)
-d.row_labels        # ['Alice', 'Bob']   (column A, from A2)
-d.column_headers    # ['q1', 'q2']       (row 1, from B1)
-d.corner            # value of cell A1
+d.rows              # [[10, 20], [30, 40]]   (B2 onward, by row — typed)
+d.columns           # [[10, 30], [20, 40]]   (same data, by column)
+d.row_labels        # ['Alice', 'Bob']       (column A, from A2 — str)
+d.column_headers    # ['q1', 'q2']           (row 1, from B1 — str)
+d.corner            # value of cell A1       (str)
 ```
 
 Every field is a fresh copy — mutating `t.data.rows` does not change the table.
@@ -120,8 +127,8 @@ Every field is a fresh copy — mutating `t.data.rows` does not change the table
 ### Access by label
 
 ```python
-t.read_row("Bob")            # a data row (no label)
-t.read_column("q1")          # a data column (no header)
+t.read_row("Bob")            # [30, 40]   — a data row (no label), typed
+t.read_column("q1")          # [10, 30]   — a data column (no header)
 ```
 
 Unknown labels raise `KeyError`. `add_row` / `add_column` / `rename_row` /
@@ -137,13 +144,13 @@ header row, column 1 is the label column), or **both strings** for a row
 label / column header pair. Mixing types raises `TypeError`.
 
 ```python
-t.read_cell("B2")                       # '10' — first data cell, by position
-t.read_cell(row=2, column=2)            # '10' — same thing, spelled out
-t.read_cell(row="Alice", column="q1")   # '10' — same value, by label
+t.read_cell("B2")                       # 10 — first data cell, by position
+t.read_cell(row=2, column=2)            # 10 — same thing, spelled out
+t.read_cell(row="Alice", column="q1")   # 10 — same value, by label
 
-t.read_cell(row=1, column=2)   # 'q1'    — a column header
-t.read_cell(row=2, column=1)   # 'Alice' — a row label
-t.read_cell("A1")               # the corner
+t.read_cell(row=1, column=2)   # 'q1'    — a column header (str)
+t.read_cell(row=2, column=1)   # 'Alice' — a row label (str)
+t.read_cell("A1")               # the corner (str)
 ```
 
 By position, `read_cell` can reach *any* cell — header, label, corner, or
@@ -178,7 +185,9 @@ t.corner = "name"
 corner by position raises `ValueError`; use `rename_row`, `rename_column`, or
 `t.corner = value` for those. Wrong-length values, and a name that would
 duplicate an existing label/header, raise `ValueError`; unknown labels raise
-`KeyError`; a non-`str` row label or column header raises `TypeError`.
+`KeyError`; a non-`str` row label, column header, or corner raises `TypeError`.
+Data values may be any type; a value Excel can't store is caught on `.write()`
+(`CellTypeError`), not when it's set.
 
 You can also build a table from nothing:
 
@@ -238,19 +247,21 @@ from pyhandlexl import read_sheet, write_sheet, append_rows
 read_sheet(path, sheet=None, *, pad=False)
 ```
 
-Returns `list[list[str]]`. Trailing empty cells are trimmed from each row (a
-fully empty row becomes `[]`); `pad=True` right-pads every row to the widest
-row's length instead.
+Returns `list[list[object]]` — each cell as its native type (`str`, `int`,
+`float`, `bool`, `datetime`, `date`, `time`, `timedelta`), an empty cell as
+`None`. Trailing `None` values are trimmed from each row (a fully empty row
+becomes `[]`); `pad=True` right-pads every row with `None` to the widest row's
+length instead.
 
 ```python
 write_sheet(path, rows, sheet=None, *, orientation="rows")
 ```
 
 Replaces the target sheet with `rows` (other sheets untouched); adds `sheet` if
-it does not exist. Values are written as-is — `str` stays `str`, `int` stays
-`int`, `None` leaves the cell empty; there is no string-to-number conversion.
-`orientation="columns"` writes each inner list *down a column* instead of
-across a row.
+it does not exist. Values are written with their type preserved — no conversion;
+`None` leaves the cell empty. A value that isn't a type Excel can store raises
+`CellTypeError`. `orientation="columns"` writes each inner list *down a column*
+instead of across a row.
 
 ```python
 append_rows(path, rows, sheet=None)
@@ -260,9 +271,9 @@ Appends after the last row. Empty input is a no-op.
 
 ### Editing a grid: `pyhandlexl.grid`
 
-Helpers for the `list[list[str]]` that `read_sheet` returns. Each takes a grid
-and returns a **new** grid, so they compose in a pipeline. Rows and columns are
-**1-based** (row 1 is the first row), matching `Table`.
+Helpers for the `list[list[object]]` that `read_sheet` returns. Each takes a
+grid and returns a **new** grid, so they compose in a pipeline. Rows and
+columns are **1-based** (row 1 is the first row), matching `Table`.
 
 ```python
 from pyhandlexl import read_sheet, write_sheet, grid
@@ -279,7 +290,7 @@ g = grid.append_column(g, [...])
 g = grid.delete_row(g, 3)
 g = grid.delete_column(g, 2)
 
-g = grid.transpose(g)   # rows <-> columns (ragged rows padded with "")
+g = grid.transpose(g)   # rows <-> columns (ragged rows padded with None)
 g = grid.pad(g)         # rectangularise
 
 write_sheet("data.xlsx", g)
@@ -287,7 +298,8 @@ write_sheet("data.xlsx", g)
 
 `get_row(g, i)` / `get_column(g, j)` read a single line. Column operations that
 take `values` require `len(values)` to equal the row count; out-of-range
-indices raise `IndexError`.
+indices raise `IndexError`. Gaps introduced by any of these (padding a short
+row, `pad`, `transpose`) are filled with `None`.
 
 ## Sheet management
 
@@ -319,6 +331,25 @@ If any step fails the temporary file is removed and the original is left exactly
 as it was. If the target is locked (open in Excel), writes retry briefly before
 raising `FileLockedError`.
 
+## Round-trip notes
+
+Excel forces a few small type changes on `write` → `read`:
+
+| You write | You read back | Why |
+|---|---|---|
+| `5.0` (float) | `5` (int) | Excel stores all numbers as float; openpyxl returns `int` when the value is whole |
+| `date(2026, 1, 1)` | `datetime(2026, 1, 1, 0, 0)` | Excel has no date-only type |
+| `""` (empty string) | `None` | Excel doesn't distinguish an empty string from a blank cell |
+| int larger than 2⁵³ | loses precision | float limit |
+
+Rejected outright (`CellTypeError`): `Decimal` (would silently become `float`),
+timezone-aware `datetime`/`time` (Excel has no timezone), and any non-cell type
+(`list`, `dict`, `bytes`, `complex`, …). A `str` that looks numeric (`"007"`)
+stays a `str` in both directions.
+
+`check_cell_value(value)` runs this check on a single value if you want to
+validate before writing.
+
 ## Errors
 
 All raised exceptions derive from `PyhandlexlError`:
@@ -329,6 +360,7 @@ All raised exceptions derive from `PyhandlexlError`:
 | `DimensionError` | `ValueError` | data exceeds Excel's 1,048,576 × 16,384 grid |
 | `SheetNotFoundError` | `KeyError` | no worksheet with that name |
 | `FileLockedError` | `OSError` | file stayed locked through every retry |
+| `CellTypeError` | `TypeError` | a value is not a type Excel can store |
 | `InvalidFileError` | — | file is missing or not a readable `.xlsx` |
 
 ## Not in scope

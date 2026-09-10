@@ -44,6 +44,10 @@ class TestConstruction:
         with pytest.raises(TypeError):
             Table(data=[["1"]], column_headers=[1], row_labels=["x"])
 
+    def test_non_string_corner_raises_typeerror(self):
+        with pytest.raises(TypeError):
+            Table(data=[["1"]], column_headers=["a"], row_labels=["x"], corner=2026)
+
     def test_constructor_allows_duplicate_labels(self):
         # the API blocks *creating* duplicates; ingesting them is allowed
         t = Table(
@@ -74,6 +78,38 @@ class TestData:
         sample.corner = "Quarter"
         assert sample.corner == "Quarter"
         assert sample.data.corner == "Quarter"
+
+    def test_setting_non_string_corner_raises(self, sample):
+        with pytest.raises(TypeError):
+            sample.corner = 2026
+
+
+class TestReadPreservesTypesButCoercesLabels:
+    def test_data_keeps_types_headers_and_labels_are_strings(self, book):
+        write_sheet(
+            book,
+            [
+                ["", 2024, 2025],
+                [1, 10, 20.5],
+                [2, None, True],
+            ],
+        )
+        t = Table.read(book)
+        assert t.data.column_headers == ["2024", "2025"]  # numeric header -> str
+        assert t.data.row_labels == ["1", "2"]  # numeric label -> str
+        assert t.data.corner == ""
+        assert t.data.rows == [[10, 20.5], [None, True]]  # data keeps its type
+
+    def test_typed_data_round_trips_through_table(self, book):
+        import datetime as dt
+
+        t = Table(
+            data=[[10, 2.5, dt.datetime(2026, 1, 1, 9, 0)]],
+            column_headers=["a", "b", "c"],
+            row_labels=["r1"],
+        )
+        t.write(book)
+        assert Table.read(book) == t
 
 
 class TestLabelAccess:

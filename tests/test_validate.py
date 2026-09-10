@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import datetime as dt
+from decimal import Decimal
+
 import pytest
 from openpyxl import Workbook
 
-from pyhandlexl.errors import DimensionError, SheetNameError
+from pyhandlexl.errors import CellTypeError, DimensionError, SheetNameError
 from pyhandlexl.validate import (
     MAX_COLUMNS,
     MAX_ROWS,
+    check_cell_value,
     check_dimensions,
     check_sheet_name,
     is_valid_xlsx,
@@ -26,6 +30,42 @@ class TestCheckDimensions:
     def test_too_many_columns(self):
         with pytest.raises(DimensionError):
             check_dimensions(1, MAX_COLUMNS + 1)
+
+
+class TestCheckCellValue:
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "text",
+            "",
+            0,
+            42,
+            -1,
+            3.14,
+            5.0,
+            True,
+            False,
+            None,
+            dt.datetime(2026, 1, 1, 12, 0),
+            dt.date(2026, 1, 1),
+            dt.time(9, 30),
+            dt.timedelta(hours=2),
+        ],
+    )
+    def test_supported_values_pass(self, value):
+        check_cell_value(value)  # no raise
+
+    @pytest.mark.parametrize(
+        "value",
+        [[1, 2], {"a": 1}, {1, 2}, (1, 2), b"bytes", 1 + 2j, Decimal("1.5"), object()],
+    )
+    def test_unsupported_values_raise(self, value):
+        with pytest.raises(CellTypeError):
+            check_cell_value(value)
+
+    def test_tz_aware_datetime_raises(self):
+        with pytest.raises(CellTypeError):
+            check_cell_value(dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc))
 
 
 class TestCheckSheetName:

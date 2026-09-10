@@ -30,7 +30,7 @@ class TestReading:
         assert grid.get_column(g, 2) == ["b", "e", "h"]
 
     def test_get_column_pads_short_rows(self):
-        assert grid.get_column([["a"], ["b", "c"]], 2) == ["", "c"]
+        assert grid.get_column([["a"], ["b", "c"]], 2) == [None, "c"]
 
     def test_out_of_range_raises(self, g):
         with pytest.raises(IndexError):
@@ -47,7 +47,7 @@ class TestSetValue:
 
     def test_pads_a_short_row_to_reach_the_column(self):
         out = grid.set_value([["a", "b", "c"], ["d"]], 2, 3, "Z")
-        assert out == [["a", "b", "c"], ["d", "", "Z"]]
+        assert out == [["a", "b", "c"], ["d", None, "Z"]]
 
 
 class TestSetLine:
@@ -100,7 +100,7 @@ class TestAppend:
 
     def test_append_column_pads_ragged_rows_first(self):
         out = grid.append_column([["a", "b"], ["c"]], ["x", "y"])
-        assert out == [["a", "b", "x"], ["c", "", "y"]]
+        assert out == [["a", "b", "x"], ["c", None, "y"]]
 
     def test_append_column_wrong_length_raises(self, g):
         with pytest.raises(ValueError):
@@ -123,7 +123,7 @@ class TestDelete:
 
 class TestShape:
     def test_pad(self):
-        assert grid.pad([["a"], ["b", "c", "d"]]) == [["a", "", ""], ["b", "c", "d"]]
+        assert grid.pad([["a"], ["b", "c", "d"]]) == [["a", None, None], ["b", "c", "d"]]
 
     def test_transpose(self, g):
         assert grid.transpose(g) == [
@@ -133,7 +133,7 @@ class TestShape:
         ]
 
     def test_transpose_pads_ragged_rows(self):
-        assert grid.transpose([["a", "b"], ["c"]]) == [["a", "c"], ["b", ""]]
+        assert grid.transpose([["a", "b"], ["c"]]) == [["a", "c"], ["b", None]]
 
     def test_transpose_empty(self):
         assert grid.transpose([]) == []

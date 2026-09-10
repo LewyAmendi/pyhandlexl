@@ -26,3 +26,7 @@ class FileLockedError(PyhandlexlError, OSError):
 
 class SheetNotFoundError(PyhandlexlError, KeyError):
     """No worksheet with the requested name exists in the workbook."""
+
+
+class CellTypeError(PyhandlexlError, TypeError):
+    """A cell value is not a type Excel can store."""

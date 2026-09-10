@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-10
+
+### Changed
+- **Cell values keep their type.** `read_sheet` and `Table` now return each
+  cell as its native Python type (`str`, `int`, `float`, `bool`, `datetime`,
+  `date`, `time`, `timedelta`) instead of coercing everything to `str`. An
+  empty cell is `None` (previously `""`).
+- `read_sheet` return type is now `list[list[object]]`; trailing `None` (not
+  `""`) is trimmed; `pad=True` fills with `None`.
+- `Table` still coerces **row labels, column headers, and the corner** to
+  `str` — you address rows and columns by name. The corner is now validated as
+  `str` on construct and on `t.corner = ...` (was unconstrained).
+- `grid` helpers fill gaps with `None` instead of `""` (`pad`, `transpose`,
+  `get_column` of a short row, padding a short row in `set_value`/`set_column`).
+
+### Added
+- `CellTypeError(PyhandlexlError, TypeError)` — raised when a value is not a
+  type Excel can store.
+- `check_cell_value(value)` — validate a single value against the allowed set.
+  `write_sheet` / `append_rows` / `Table.write` run it on every cell;
+  timezone-aware datetimes and `Decimal` are rejected.
+
 ## [0.3.0] — 2026-09-07
 
 ### Added
@@ -100,7 +122,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.0...v0.2.1

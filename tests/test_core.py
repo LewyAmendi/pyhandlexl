@@ -81,9 +81,39 @@ class TestWriteThenRead:
         write_sheet(book, [["a", "b"], ["c", "d"]])
         assert read_sheet(book) == [["a", "b"], ["c", "d"]]
 
-    def test_values_are_returned_as_strings(self, book):
-        write_sheet(book, [[1, 2.5, True, None]])
-        assert read_sheet(book) == [["1", "2.5", "True"]]  # trailing None trimmed
+    def test_values_keep_their_type(self, book):
+        write_sheet(book, [[1, 2.5, True, "text", None]])
+        assert read_sheet(book) == [[1, 2.5, True, "text"]]  # trailing None trimmed
+
+    def test_whole_number_float_reads_back_as_int(self, book):
+        write_sheet(book, [[5.0]])
+        assert read_sheet(book) == [[5]]
+
+    def test_datetime_round_trips(self, book):
+        import datetime as dt
+
+        value = dt.datetime(2026, 9, 10, 14, 30)
+        write_sheet(book, [[value]])
+        assert read_sheet(book) == [[value]]
+
+    def test_empty_cell_reads_as_none(self, book):
+        write_sheet(book, [["a", None, "c"]])
+        assert read_sheet(book) == [["a", None, "c"]]
+
+    def test_unsupported_type_raises(self, book):
+        from pyhandlexl import CellTypeError
+
+        with pytest.raises(CellTypeError):
+            write_sheet(book, [[[1, 2, 3]]])
+
+    def test_tz_aware_datetime_raises(self, book):
+        import datetime as dt
+
+        from pyhandlexl import CellTypeError
+
+        aware = dt.datetime(2026, 9, 10, tzinfo=dt.timezone.utc)
+        with pytest.raises(CellTypeError):
+            write_sheet(book, [[aware]])
 
     def test_write_replaces_existing_content(self, book):
         write_sheet(book, [["old", "old", "old"], ["old", "old", "old"]])
@@ -114,13 +144,18 @@ class TestReadSheet:
         with pytest.raises(SheetNotFoundError):
             read_sheet(book, "Ghost")
 
-    def test_trailing_empty_cells_are_trimmed(self, book):
-        write_sheet(book, [["a", "", ""], ["b", "c", ""]])
+    def test_trailing_none_is_trimmed(self, book):
+        write_sheet(book, [["a", None, None], ["b", "c", None]])
         assert read_sheet(book) == [["a"], ["b", "c"]]
+
+    def test_empty_string_becomes_an_empty_cell(self, book):
+        # openpyxl / Excel do not distinguish "" from a blank cell
+        write_sheet(book, [["a", "", "b"]])
+        assert read_sheet(book) == [["a", None, "b"]]
 
     def test_pad_makes_result_rectangular(self, book):
         write_sheet(book, [["a"], ["b", "c", "d"]])
-        assert read_sheet(book, pad=True) == [["a", "", ""], ["b", "c", "d"]]
+        assert read_sheet(book, pad=True) == [["a", None, None], ["b", "c", "d"]]
 
 
 class TestOrientation:
