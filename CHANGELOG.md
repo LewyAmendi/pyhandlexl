@@ -9,38 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] — 2026-09-12
 
-### Added
-- **Named tables — multiple `Table`s on one worksheet.** A `Table` can now
-  have a `name`. Named tables stack left to right on a sheet with one empty
-  column between them, always starting at row 1.
-  - `Table(..., name="Sales")`
-  - `t.create(path, sheet)` — places a brand-new named table; `TableExistsError`
+### Changed
+- **BREAKING: every `Table` now requires a `name`, and is tracked by name —
+  not by sheet.** Whole-sheet `Table` usage is retired.
+  - `Table(...)` now takes a required, keyword-only `name`.
+  - A table is placed once with `t.create(path, sheet)` — `TableExistsError`
     if the name is taken, `SheetNotFoundError` if the sheet doesn't exist.
-  - `Table.read(path, name="Sales")` — finds a table by name; no `sheet=` needed.
-  - `t.write(path)` — writes a named table back to its tracked location
-    (`sheet=` is rejected here — location comes from the schema).
+  - `Table.read(path, name)` — finds a table by name anywhere in the
+    workbook; `sheet=` is gone, since the name is enough.
+  - `t.write(path)` — writes a table back to its tracked location;
+    `sheet=` is gone here too. `TableNotFoundError` if `.create()` was never
+    called for it.
+  - The `column_headers=False` / `row_labels=False` reading modes are gone —
+    every table always has both.
+  - Several named tables can share one worksheet — see
+    [Multiple named tables on one sheet](README.md#multiple-named-tables-on-one-sheet).
+    Tables stack left to right with one empty column between them, always
+    starting at row 1. Growing a table's columns shifts every table to its
+    right on the same sheet; growing rows never shifts anything.
   - `list_tables(path)` — every named table in the workbook.
   - `delete_table(path, name)` — removes a named table; leaves the space empty
     (no shifting) and frees the name for reuse.
-  - Growing a table's columns automatically shifts every table to its right
-    on the same sheet; growing rows never shifts anything.
   - Each table's first cell holds a literal `"TABLE NAME"` marker plus its
     name; a workbook-wide schema sheet (`_pyhandlexl_tables`, reserved) caches
     positions. Reads/writes verify the marker before trusting the cached
     position and self-heal (and may write, even on a "read") if a table has
     moved; `TableNotFoundError` if it can't be found at all.
   - Table names are unique per workbook. Duplicate row labels/column headers
-    within one named table are blocked the same as for a whole-sheet `Table`.
+    within one table are blocked the same as before.
+
+### Added
 - `Table.show(*, rows=None, head=5, tail=5)` — print a table to the console as
   a plain aligned grid. Defaults to the first and last 5 rows (everything, if
   10 rows or fewer); pass `head=None, tail=None` for every row. A debug
   convenience, unrelated to cell formatting in the workbook.
 - `TableNotFoundError(PyhandlexlError, KeyError)` and
   `TableExistsError(PyhandlexlError, ValueError)`.
-
-### Changed
-- Whole-sheet `Table` usage (no `name`) is completely unaffected — this is
-  purely additive.
 
 ## [0.4.0] — 2026-09-10
 

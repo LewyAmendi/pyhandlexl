@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
+import datetime as dt
 
-from pyhandlexl.core import read_sheet, write_sheet
+import pytest
+from openpyxl import load_workbook
+
+from pyhandlexl.core import read_sheet
 from pyhandlexl.table import Table, TableData
 
 
@@ -18,53 +21,58 @@ def sample():
         column_headers=["North", "South", "East"],
         row_labels=["Revenue", "Costs"],
         corner="Metric",
+        name="Sample",
     )
 
 
 class TestConstruction:
-    def test_name_defaults_to_none(self):
-        assert Table(data=[["1"]]).name is None
+    def test_name_is_required(self):
+        with pytest.raises(TypeError):
+            Table(data=[["1"]])
 
     def test_name_is_stored(self):
         assert Table(data=[["1"]], name="Sales").name == "Sales"
 
-    def test_repr_includes_name_when_set(self):
+    def test_non_string_name_raises_typeerror(self):
+        with pytest.raises(TypeError):
+            Table(data=[["1"]], name=123)
+
+    def test_empty_name_raises(self):
+        with pytest.raises(ValueError):
+            Table(data=[["1"]], name="")
+
+    def test_repr_includes_name(self):
         assert "name='Sales'" in repr(Table(data=[["1"]], name="Sales"))
-        assert "name=" not in repr(Table(data=[["1"]]))
 
     def test_mismatched_row_labels_raise(self):
         with pytest.raises(ValueError):
-            Table(data=[["1"]], column_headers=["a"], row_labels=["x", "y"])
+            Table(data=[["1"]], column_headers=["a"], row_labels=["x", "y"], name="T")
 
     def test_mismatched_row_width_raises(self):
         with pytest.raises(ValueError):
-            Table(data=[["1", "2"]], column_headers=["a"], row_labels=["x"])
+            Table(data=[["1", "2"]], column_headers=["a"], row_labels=["x"], name="T")
 
     def test_grid_only_is_allowed(self):
-        t = Table(data=[["1", "2"], ["3", "4"]])
+        t = Table(data=[["1", "2"], ["3", "4"]], name="T")
         assert t.data.rows == [["1", "2"], ["3", "4"]]
         assert t.data.column_headers == []
         assert t.data.row_labels == []
 
     def test_non_string_row_label_raises_typeerror(self):
         with pytest.raises(TypeError):
-            Table(data=[["1"]], column_headers=["a"], row_labels=[1])
+            Table(data=[["1"]], column_headers=["a"], row_labels=[1], name="T")
 
     def test_non_string_column_header_raises_typeerror(self):
         with pytest.raises(TypeError):
-            Table(data=[["1"]], column_headers=[1], row_labels=["x"])
+            Table(data=[["1"]], column_headers=[1], row_labels=["x"], name="T")
 
     def test_non_string_corner_raises_typeerror(self):
         with pytest.raises(TypeError):
-            Table(data=[["1"]], column_headers=["a"], row_labels=["x"], corner=2026)
+            Table(data=[["1"]], column_headers=["a"], row_labels=["x"], corner=2026, name="T")
 
     def test_constructor_allows_duplicate_labels(self):
         # the API blocks *creating* duplicates; ingesting them is allowed
-        t = Table(
-            data=[["1"], ["2"]],
-            column_headers=["a"],
-            row_labels=["dup", "dup"],
-        )
+        t = Table(data=[["1"], ["2"]], column_headers=["a"], row_labels=["dup", "dup"], name="T")
         assert t.data.row_labels == ["dup", "dup"]
 
 
@@ -95,31 +103,36 @@ class TestData:
 
 
 class TestReadPreservesTypesButCoercesLabels:
-    def test_data_keeps_types_headers_and_labels_are_strings(self, book):
-        write_sheet(
-            book,
-            [
-                ["", 2024, 2025],
-                [1, 10, 20.5],
-                [2, None, True],
-            ],
-        )
-        t = Table.read(book)
-        assert t.data.column_headers == ["2024", "2025"]  # numeric header -> str
-        assert t.data.row_labels == ["1", "2"]  # numeric label -> str
-        assert t.data.corner == ""
+    def test_numeric_header_and_label_cells_are_coerced_to_str(self, book):
+        Table(
+            data=[[10, 20.5], [None, True]],
+            column_headers=["a", "b"],
+            row_labels=["r1", "r2"],
+            name="T",
+        ).create(book, sheet="Sheet")
+
+        # Simulate a header/label cell that happens to hold a number on disk
+        # (e.g. someone edited the sheet by hand).
+        wb = load_workbook(book)
+        ws = wb["Sheet"]
+        ws["B2"] = 2024  # the "a" column header
+        ws["A3"] = 1  # the "r1" row label
+        wb.save(book)
+
+        t = Table.read(book, "T")
+        assert t.data.column_headers == ["2024", "b"]
+        assert t.data.row_labels == ["1", "r2"]
         assert t.data.rows == [[10, 20.5], [None, True]]  # data keeps its type
 
     def test_typed_data_round_trips_through_table(self, book):
-        import datetime as dt
-
         t = Table(
             data=[[10, 2.5, dt.datetime(2026, 1, 1, 9, 0)]],
             column_headers=["a", "b", "c"],
             row_labels=["r1"],
+            name="T",
         )
-        t.write(book)
-        assert Table.read(book) == t
+        t.create(book, sheet="Sheet")
+        assert Table.read(book, "T") == t
 
 
 class TestLabelAccess:
@@ -179,48 +192,37 @@ class TestCellByPosition:
 
 
 class TestDunders:
-    def test_equality(self, sample):
+    def test_equality_ignores_name(self, sample):
         same = Table(
             data=[["100", "200", "150"], ["40", "60", "55"]],
             column_headers=["North", "South", "East"],
             row_labels=["Revenue", "Costs"],
             corner="Metric",
+            name="DifferentName",
         )
         assert sample == same
-        assert sample != Table(data=[["1"]])
+        assert sample != Table(data=[["1"]], name="T")
 
 
 class TestReadWriteRoundTrip:
     def test_write_then_read_reproduces_the_table(self, book, sample):
-        sample.write(book)
-        assert Table.read(book) == sample
+        sample.create(book, sheet="Sheet")
+        assert Table.read(book, sample.name) == sample
 
     def test_assembled_grid_layout_on_disk(self, book, sample):
-        sample.write(book)
+        sample.create(book, sheet="Sheet")
         assert read_sheet(book) == [
+            ["TABLE NAME", "Sample"],
             ["Metric", "North", "South", "East"],
             ["Revenue", "100", "200", "150"],
             ["Costs", "40", "60", "55"],
         ]
 
-    def test_read_without_row_labels(self, book):
-        Table(data=[["1", "2"]], column_headers=["a", "b"]).write(book)
-        t = Table.read(book, row_labels=False)
-        assert t.data.column_headers == ["a", "b"]
-        assert t.data.row_labels == []
-        assert t.data.rows == [["1", "2"]]
-
-    def test_write_to_missing_file_raises(self, tmp_path, sample):
-        with pytest.raises(FileNotFoundError):
-            sample.write(tmp_path / "nope.xlsx")
-
-    def test_read_missing_file_raises(self, tmp_path):
-        with pytest.raises(FileNotFoundError):
-            Table.read(tmp_path / "nope.xlsx")
-
-    def test_read_allows_a_file_with_duplicate_headers(self, book):
-        write_sheet(book, [["", "amount", "amount"], ["Jan", "10", "20"]])
-        t = Table.read(book)
+    def test_read_allows_duplicate_headers(self, book):
+        Table(
+            data=[[10, 20]], column_headers=["amount", "amount"], row_labels=["Jan"], name="Dup"
+        ).create(book, sheet="Sheet")
+        t = Table.read(book, "Dup")
         assert t.data.column_headers == ["amount", "amount"]
 
 
@@ -328,7 +330,7 @@ class TestAdd:
             sample.add_column("North", [10, 20])
 
     def test_build_table_from_empty(self):
-        t = Table(data=[], column_headers=["a", "b"])
+        t = Table(data=[], column_headers=["a", "b"], name="T")
         t.add_row("x", [1, 2])
         t.add_row("y", [3, 4])
         assert t.data.rows == [[1, 2], [3, 4]]
@@ -382,6 +384,8 @@ class TestRemoveAndRename:
 
 class TestMutationKeepsInvariants:
     def test_edits_survive_a_round_trip(self, book, sample):
+        sample.create(book, sheet="Sheet")
+
         # strings only, so the round trip is exact (read_sheet coerces to str)
         sample.set_cell(row="Revenue", column="North", value="111")
         sample.add_row("Profit", ["1", "2", "3"])
@@ -389,4 +393,4 @@ class TestMutationKeepsInvariants:
         sample.rename_row("Costs", "Expenses")
 
         sample.write(book)
-        assert Table.read(book) == sample
+        assert Table.read(book, sample.name) == sample

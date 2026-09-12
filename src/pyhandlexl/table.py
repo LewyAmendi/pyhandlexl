@@ -1,14 +1,17 @@
-"""The Table class: a worksheet read as column headers, row labels, and a data grid.
+"""The Table class: a named table living on a worksheet.
 
-Layout convention: row 1 holds the column headers, column A holds the row
-labels, cell A1 is the "corner", and the data region is everything from B2
-onward. Row labels, column headers, and the corner are always strings; data
-values keep their type. Positional access uses Excel coordinates (row 1 is the
+Layout convention, anchored wherever the table's schema entry says it starts:
+the first cell holds the marker ``"TABLE NAME"`` plus the table's name, the
+next row holds the column headers (with the "corner" in its first cell), and
+every row after that holds a row label followed by data. Row labels, column
+headers, and the corner are always strings; data values keep their type.
+Positional access uses coordinates relative to the table itself (row 1 is the
 header row, column 1 is the label column).
 
-A Table may also have a *name*, which lets more than one Table live on the
-same worksheet — see :meth:`Table.create` and the ``name=`` argument to
-:meth:`Table.read`.
+Every table has a name — see :meth:`Table.create`, :meth:`Table.read`, and
+:meth:`Table.write`. Multiple tables can share one worksheet: see
+`Organised data: the Table class` in the README for the placement and
+self-healing rules.
 """
 
 from __future__ import annotations
@@ -21,7 +24,6 @@ from openpyxl.utils import coordinate_to_tuple
 
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._safety import atomic_save, safe_load
-from pyhandlexl.core import read_sheet, write_sheet
 from pyhandlexl.errors import SheetNotFoundError
 from pyhandlexl.validate import check_cell_value, check_dimensions
 
@@ -43,11 +45,11 @@ class TableData:
 
 
 class Table:
-    """A labeled table backed by a worksheet.
+    """A named table, always with column headers, row labels, and a corner.
 
-    Construct directly from parts, or with :meth:`read` from a file. Mutation
-    methods edit the table in place and return ``None``. Row labels and column
-    headers are always ``str``.
+    Construct directly from parts (``name=`` required), or with :meth:`read`
+    from a file. Mutation methods edit the table in place and return
+    ``None``. Row labels and column headers are always ``str``.
     """
 
     def __init__(
@@ -56,16 +58,21 @@ class Table:
         column_headers: Iterable[str] = (),
         row_labels: Iterable[str] = (),
         corner: str = "",
-        name: str | None = None,
+        *,
+        name: str,
     ) -> None:
         self._data: list[list[object]] = [list(row) for row in data]
         self._column_headers: list[str] = list(column_headers)
         self._row_labels: list[str] = list(row_labels)
         self._corner: str = corner
-        self._name: str | None = name
+        self._name: str = name
         self._validate()
 
     def _validate(self) -> None:
+        if not isinstance(self._name, str):
+            raise TypeError(f"name must be str, got {type(self._name).__name__}: {self._name!r}")
+        if not self._name:
+            raise ValueError("name must not be empty")
         for label in self._row_labels:
             if not isinstance(label, str):
                 raise TypeError(f"row labels must be str, got {type(label).__name__}: {label!r}")
@@ -90,50 +97,13 @@ class Table:
     # ------------------------------------------------------------------ read
 
     @classmethod
-    def read(
-        cls,
-        path: str | Path,
-        sheet: str | None = None,
-        *,
-        name: str | None = None,
-        column_headers: bool = True,
-        row_labels: bool = True,
-    ) -> Table:
-        """Read a worksheet, or one named table on it, into a Table.
-
-        Args:
-            path: the .xlsx file.
-            sheet: worksheet name, or ``None`` for the active sheet. Ignored
-                if *name* is given — a named table's sheet comes from the
-                schema.
-            name: read the named table called *name* instead of the whole
-                sheet. See :meth:`create` for how named tables are made.
-            column_headers: treat row 1 as column headers (whole-sheet mode only).
-            row_labels: treat column A as row labels (whole-sheet mode only).
+    def read(cls, path: str | Path, name: str) -> Table:
+        """Read the named table called *name*.
 
         Raises:
-            TableNotFoundError: *name* is given but no such table exists, or
-                its marker cannot be found on its recorded sheet.
+            TableNotFoundError: no such table exists, or its marker cannot be
+                found on its recorded sheet.
         """
-        if name is not None:
-            return cls._read_named(path, name)
-
-        grid = read_sheet(path, sheet, pad=True)
-        if not grid:
-            return cls([], [], [], "")
-
-        row_start = 1 if column_headers else 0
-        col_start = 1 if row_labels else 0
-
-        corner = _to_label(grid[0][0]) if (column_headers and row_labels) else ""
-        headers = [_to_label(h) for h in grid[0][col_start:]] if column_headers else []
-        labels = [_to_label(grid[r][0]) for r in range(row_start, len(grid))] if row_labels else []
-        data = [grid[r][col_start:] for r in range(row_start, len(grid))]
-
-        return cls(data, headers, labels, corner)
-
-    @classmethod
-    def _read_named(cls, path: str | Path, name: str) -> Table:
         workbook = safe_load(path)
         try:
             entries = mt.load_schema(workbook)
@@ -166,8 +136,8 @@ class Table:
     # ------------------------------------------------------------ properties
 
     @property
-    def name(self) -> str | None:
-        """This table's name, or ``None`` if it isn't a named (multi-table) table."""
+    def name(self) -> str:
+        """This table's name."""
         return self._name
 
     @property
@@ -284,10 +254,10 @@ class Table:
         """A single value, addressed either by position or by label.
 
         Give either a ref like ``"B2"``, or ``row=``/``column=`` as a matching
-        pair: both ints for a 1-based Excel position (row 1 is the header row,
-        column 1 is the label column, so ``read_cell(row=2, column=2)`` is the
-        first data cell), or both strings for a row label / column header pair
-        — e.g. ``read_cell(row="Alice", column="q1")``.
+        pair: both ints for a 1-based position within the table (row 1 is the
+        header row, column 1 is the label column, so ``read_cell(row=2,
+        column=2)`` is the first data cell), or both strings for a row label /
+        column header pair — e.g. ``read_cell(row="Alice", column="q1")``.
 
         By position, ``read_cell`` can reach any cell — header, label, corner,
         or data. By label it always reads data (the label-addressed equivalent
@@ -369,7 +339,7 @@ class Table:
             raise ValueError(f"row label {label!r} already exists")
         new_row = list(values)
         if self._data and not self._row_labels:
-            raise ValueError("this table has no row labels; use the raw layer to add rows")
+            raise ValueError("this table has no row labels; use the grid layout to add rows")
         if (self._data or self._column_headers) and len(new_row) != self._width():
             raise ValueError(f"expected {self._width()} values, got {len(new_row)}")
         self._data.append(new_row)
@@ -387,7 +357,7 @@ class Table:
             raise ValueError(f"column header {header!r} already exists")
         new_col = list(values)
         if any(self._data) and not self._column_headers:
-            raise ValueError("this table has no column headers; use the raw layer to add columns")
+            raise ValueError("this table has no column headers; use the grid layout to add columns")
         if len(new_col) != len(self._data):
             raise ValueError(f"expected {len(self._data)} values, got {len(new_col)}")
         for data_row, value in zip(self._data, new_col, strict=True):
@@ -483,32 +453,17 @@ class Table:
             grid.append(out_row)
         return grid
 
-    def write(self, path: str | Path, sheet: str | None = None) -> None:
-        """Write the table to *path*.
+    def write(self, path: str | Path) -> None:
+        """Write this table back to its tracked position.
 
-        Without a name: reassembles headers into row 1 and labels into
-        column A, and writes the whole sheet (other sheets untouched). The
-        file must already exist (:func:`pyhandlexl.create_workbook` first).
-
-        With a name: the table must already exist (see :meth:`create`) —
-        *sheet* is not accepted here, since a named table's location comes
-        from the schema. Writes back to its recorded position, growing it in
-        place; if it needs more columns than before, every table to its right
-        on the same sheet is shifted over to make room.
+        The table must already exist — create it first with :meth:`create`
+        (``TableNotFoundError`` otherwise). Growing it in place — more columns
+        than it had before — shifts every table to its right on the same
+        sheet to make room; growing rows never shifts anything.
 
         Every data value must be a type Excel can store (``CellTypeError``
         otherwise) — the check happens here, not when values are set.
         """
-        if self._name is None:
-            write_sheet(path, self._assemble(), sheet)
-            return
-        if sheet is not None:
-            raise TypeError(
-                "sheet= is not used for a named table; its location comes from the schema"
-            )
-        self._write_named(path)
-
-    def _write_named(self, path: str | Path) -> None:
         workbook = safe_load(path)
         try:
             entries = mt.load_schema(workbook)
@@ -554,22 +509,17 @@ class Table:
             workbook.close()
 
     def create(self, path: str | Path, sheet: str) -> None:
-        """Place this table as a brand-new named table on *sheet*.
+        """Place this table as a brand-new table on *sheet*.
 
-        Requires ``name`` to be set (``Table(..., name=...)``). Tables on a
-        sheet stack left to right with one empty column between them, always
-        starting at row 1.
+        Tables on a sheet stack left to right with one empty column between
+        them, always starting at row 1.
 
         Raises:
-            ValueError: this table has no name.
             TableExistsError: a table named this already exists in the workbook.
             SheetNotFoundError: *sheet* does not exist.
             CellTypeError: a data value is not a type Excel can store.
             DimensionError: the placed table would exceed Excel's grid limits.
         """
-        if self._name is None:
-            raise ValueError("set a name (Table(..., name=...)) to create a named table")
-
         workbook = safe_load(path)
         try:
             if sheet not in workbook.sheetnames:
@@ -612,8 +562,7 @@ class Table:
         )
 
     def __repr__(self) -> str:
-        name_part = f"name={self._name!r}, " if self._name is not None else ""
         return (
-            f"Table({name_part}rows={len(self._data)}, columns={len(self._column_headers)}, "
-            f"corner={self._corner!r})"
+            f"Table(name={self._name!r}, rows={len(self._data)}, "
+            f"columns={len(self._column_headers)}, corner={self._corner!r})"
         )

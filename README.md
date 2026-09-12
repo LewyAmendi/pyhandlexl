@@ -19,10 +19,10 @@ than where it sits.
 ```python
 from pyhandlexl import Table
 
-t = Table.read("budget.xlsx")
-t.read_cell(row="Revenue", column="North")   # 4200  — by name, and typed
-t.add_row("Q3", [120, 90, 60])
-t.write("budget.xlsx")                        # safe, atomic write
+t = Table.read("budget.xlsx", "Budget")
+t.read_cell(row="Alice", column="q2")   # 20  — by name, and typed
+t.add_row("Carol", [1, 2])
+t.write("budget.xlsx")                   # safe, atomic write
 ```
 
 `pyhandlexl` splits cleanly in two, by how organised your data is:
@@ -49,17 +49,28 @@ Requires Python 3.10+.
 
 ## Quickstart
 
-Given `budget.xlsx`:
-
-|        | q1 | q2 |
-|--------|----|----|
-| **Alice** | 10 | 20 |
-| **Bob**   | 30 | 40 |
+`pyhandlexl` never creates a file or a table implicitly, so a full lifecycle
+looks like this:
 
 ```python
-from pyhandlexl import Table
+from pyhandlexl import Table, create_workbook, create_sheet
 
-t = Table.read("budget.xlsx")
+create_workbook("budget.xlsx")
+create_sheet("budget.xlsx", "Data")
+
+Table(
+    data=[[10, 20], [30, 40]],
+    column_headers=["q1", "q2"],
+    row_labels=["Alice", "Bob"],
+    name="Budget",
+).create("budget.xlsx", sheet="Data")   # first placement — explicit
+```
+
+From then on, read and write it by name — no need to remember which sheet
+it's on:
+
+```python
+t = Table.read("budget.xlsx", "Budget")
 
 t.read_cell(row="Alice", column="q2")   # 20     (int)
 t.read_row("Bob")                       # [30, 40]
@@ -68,16 +79,6 @@ t.read_column("q1")                     # [10, 30]
 t.set_cell(row="Alice", column="q1", value=99)   # edit in place
 t.add_row("Carol", [1, 2])
 t.write("budget.xlsx")     # one safe, atomic write
-```
-
-Starting from scratch? Create the file first — `pyhandlexl` never creates one
-implicitly:
-
-```python
-from pyhandlexl import create_workbook, Table
-
-create_workbook("new.xlsx")
-Table(data=[[10, 20]], column_headers=["q1", "q2"], row_labels=["Alice"]).write("new.xlsx")
 ```
 
 > **Values keep their type.** `read_sheet` and `Table` return each cell as its
@@ -91,12 +92,11 @@ Table(data=[[10, 20]], column_headers=["q1", "q2"], row_labels=["Alice"]).write(
 ## Organised data: the `Table` class
 
 **Use this when your data has structure — column headers and row labels
-that name what's in each cell.** A `Table` treats a worksheet as exactly
-that: row 1 is the column headers, column A is the row labels, `A1` is the
-corner, and everything from `B2` on is the data. You work with it by name —
-rows, columns, and cells are addressed by their label, not their position —
-and it stays in sync as you add, drop, or rename rows and columns. A
-worksheet can hold more than one `Table` — see
+that name what's in each cell.** A `Table` treats a worksheet region as
+exactly that: a header row, a label column, a corner, and data — and it
+stays in sync as you add, drop, or rename rows and columns. Every `Table`
+has a **name**, which is how you find it again; a worksheet can hold more
+than one, side by side — see
 [Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet).
 
 If your sheet is just a plain grid with nothing to name, skip ahead to
@@ -105,17 +105,15 @@ If your sheet is just a plain grid with nothing to name, skip ahead to
 ### Reading
 
 ```python
-Table.read(path, sheet=None, *, column_headers=True, row_labels=True)
+Table.read(path, name)
 ```
 
-- `sheet=None` reads the active sheet; pass a name for a specific one.
-- `column_headers=False` — row 1 is ordinary data, `column_headers` is empty.
-- `row_labels=False` — column A is ordinary data, `row_labels` is empty.
+Finds the table called `name` anywhere in the workbook — no need to know
+which sheet it's on. `TableNotFoundError` if there's no table by that name.
 
-Row labels, column headers, and the corner are always `str`. Reading a sheet
-with a numeric header (`2024`) coerces it to `"2024"`; building a `Table` by
-hand with a non-`str` label/header/corner raises `TypeError`. Data values keep
-their type.
+Row labels, column headers, and the corner are always `str`. A numeric header
+cell (`2024`) is read back as `"2024"`; building a `Table` by hand with a
+non-`str` label/header/corner raises `TypeError`. Data values keep their type.
 
 ### The whole table at once
 
@@ -200,26 +198,32 @@ duplicate an existing label/header, raise `ValueError`; unknown labels raise
 Data values may be any type; a value Excel can't store is caught on `.write()`
 (`CellTypeError`), not when it's set.
 
-You can also build a table from nothing:
+You can also build a table up from nothing before placing it — `create()` is
+only needed once, for that first placement:
 
 ```python
 from pyhandlexl import create_workbook, Table
 
-t = Table([], column_headers=["q1", "q2"])
+t = Table([], column_headers=["q1", "q2"], name="Budget")
 t.add_row("Alice", [10, 20])
 create_workbook("new.xlsx")
-t.write("new.xlsx")
+t.create("new.xlsx", sheet="Sheet")
 ```
 
 ### Writing
 
 ```python
-t.write(path, sheet=None)
+t.create(path, sheet)   # first placement on a sheet
+t.write(path)            # every write after that
 ```
 
-Reassembles headers into row 1 and labels into column A, then writes the whole
-sheet. Other sheets in the file are left untouched. The file must already
-exist — see [Files](#files).
+`create` places a brand-new named table on `sheet`: `TableExistsError` if the
+name is already taken, `SheetNotFoundError` if the sheet doesn't exist. Once a
+table has been created, `write` reassembles its headers, labels, and data and
+writes it back to its tracked location — no `sheet=` needed, and
+`TableNotFoundError` if the table was never created (or has since been
+deleted). The file must already exist for either call — see
+[Files](#files).
 
 ### Equality
 
@@ -233,10 +237,9 @@ so the call site says what's being checked: `len(t.data.rows)`,
 
 ### Multiple named tables on one sheet
 
-A `Table` can have a **name**, which lets several tables live on the same
-worksheet — a "Sales" table and an "Inventory" table side by side, for
-example. Tables stack **left to right** with exactly one empty column between
-them, and always start at row 1.
+A worksheet isn't limited to one table — a "Sales" table and an "Inventory"
+table can live side by side. Tables stack **left to right** with exactly one
+empty column between them, and always start at row 1.
 
 ```python
 from pyhandlexl import Table, create_workbook, create_sheet
@@ -255,19 +258,11 @@ sales.create("shop.xlsx", sheet="Data")          # first placement — explicit
 inventory = Table(data=[[10], [20]], column_headers=["Units"], row_labels=["A", "B"], name="Inventory")
 inventory.create("shop.xlsx", sheet="Data")       # lands to the right of Sales
 
-sales = Table.read("shop.xlsx", name="Sales")     # no sheet= needed — the name finds it
+sales = Table.read("shop.xlsx", "Sales")          # no sheet= needed — the name finds it
 sales.add_column("East", [300, 350])
 sales.write("shop.xlsx")                          # Inventory shifts right automatically
 ```
 
-- **`t.create(path, sheet)`** — places a *new* named table. `TableExistsError`
-  if the name is already taken; `SheetNotFoundError` if `sheet` doesn't exist.
-- **`Table.read(path, name=...)`** — finds a named table by name; `sheet=` is
-  not needed (or accepted with `name=`) since the table's location is tracked
-  for you. `TableNotFoundError` if there's no table by that name.
-- **`t.write(path)`** — writes a named table back to its tracked location. The
-  table must already exist (`.create()` first) — `TableNotFoundError`
-  otherwise. `sheet=` is rejected here too, for the same reason.
 - **`list_tables(path)`** — every named table in the workbook, across all sheets.
 - **`delete_table(path, name)`** — removes a named table; `TableNotFoundError`
   if it doesn't exist. Leaves the space empty — other tables on the sheet are
@@ -278,8 +273,8 @@ sales.write("shop.xlsx")                          # Inventory shifts right autom
   right to make room — this can rewrite more than one table's position in a
   single `.write()`. **Growing rows never shifts anything**, since nothing sits
   below a table.
-- **Duplicate row labels/column headers within one table** are blocked exactly
-  as they are for a whole-sheet `Table` — nothing new to learn there.
+- **Duplicate row labels/column headers within one table** are blocked the
+  same way regardless of how many tables share the sheet.
 
 **How it stays correct if you edit the sheet by hand.** Every named table's
 first cell literally contains the text `"TABLE NAME"`, with the table's name

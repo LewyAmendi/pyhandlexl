@@ -75,10 +75,9 @@ class TestCreate:
         with pytest.raises(SheetNotFoundError):
             _sales().create(book, sheet="Ghost")
 
-    def test_no_name_raises(self, data_sheet):
-        unnamed = Table(data=[[1]], column_headers=["a"], row_labels=["r"])
-        with pytest.raises(ValueError):
-            unnamed.create(data_sheet, sheet="Data")
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            _sales().create(tmp_path / "nope.xlsx", sheet="Data")
 
     def test_unsupported_cell_type_raises(self, data_sheet):
         bad = Table(data=[[[1, 2]]], column_headers=["a"], row_labels=["r"], name="Bad")
@@ -107,6 +106,10 @@ class TestReadNamed:
     def test_unknown_name_raises(self, data_sheet):
         with pytest.raises(TableNotFoundError):
             Table.read(data_sheet, name="Ghost")
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            Table.read(tmp_path / "nope.xlsx", name="Sales")
 
     def test_self_heals_when_marker_has_moved(self, data_sheet):
         from openpyxl import load_workbook
@@ -154,6 +157,10 @@ class TestWriteNamed:
         t = _sales()
         with pytest.raises(TableNotFoundError):
             t.write(data_sheet)
+
+    def test_write_to_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            _sales().write(tmp_path / "nope.xlsx")
 
     def test_growth_shifts_the_next_table_right(self, data_sheet):
         _sales().create(data_sheet, sheet="Data")
@@ -245,14 +252,8 @@ class TestDeleteTable:
         assert list_tables(data_sheet) == ["Sales"]
 
 
-class TestUnnamedModeUnaffected:
-    def test_whole_sheet_table_ignores_the_schema(self, book):
-        write_sheet(book, [["", "a"], ["r1", 1]])
-        t = Table.read(book)
-        assert t.name is None
-        assert t.data.rows == [[1]]
-
-    def test_named_and_unnamed_tables_can_coexist_in_a_workbook(self, data_sheet):
+class TestNamedTableAndGridLayoutCoexist:
+    def test_a_plain_grid_sheet_can_sit_alongside_named_tables(self, data_sheet):
         _sales().create(data_sheet, sheet="Data")
         write_sheet(data_sheet, [["x", "y"]], sheet="Plain")
         assert read_sheet(data_sheet, "Plain") == [["x", "y"]]
@@ -261,7 +262,9 @@ class TestUnnamedModeUnaffected:
 
 class TestShow:
     def test_show_all(self, capsys):
-        t = Table(data=[[1], [2]], column_headers=["v"], row_labels=["a", "b"], corner="#")
+        t = Table(
+            data=[[1], [2]], column_headers=["v"], row_labels=["a", "b"], corner="#", name="T"
+        )
         t.show()
         out = capsys.readouterr().out
         assert "a" in out and "b" in out and "v" in out
@@ -271,6 +274,7 @@ class TestShow:
             data=[[i] for i in range(5)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(5)],
+            name="T",
         )
         t.show(rows=2)
         lines = capsys.readouterr().out.strip().splitlines()
@@ -281,6 +285,7 @@ class TestShow:
             data=[[i] for i in range(10)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(10)],
+            name="T",
         )
         t.show(head=2, tail=2)
         lines = capsys.readouterr().out.strip().splitlines()
@@ -289,13 +294,13 @@ class TestShow:
         assert "..." in lines[3]
 
     def test_show_head_tail_no_divider_when_it_would_cover_everything(self, capsys):
-        t = Table(data=[[1], [2]], column_headers=["v"], row_labels=["a", "b"])
+        t = Table(data=[[1], [2]], column_headers=["v"], row_labels=["a", "b"], name="T")
         t.show(head=2, tail=2)
         lines = capsys.readouterr().out.strip().splitlines()
         assert not any("..." in line for line in lines)
 
     def test_show_empty_table(self, capsys):
-        Table(data=[]).show()
+        Table(data=[], name="T").show()
         assert "empty" in capsys.readouterr().out
 
     def test_default_truncates_to_head_and_tail_5(self, capsys):
@@ -303,6 +308,7 @@ class TestShow:
             data=[[i] for i in range(12)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(12)],
+            name="T",
         )
         t.show()  # no args — should default to head=5, tail=5
         lines = capsys.readouterr().out.strip().splitlines()
@@ -318,6 +324,7 @@ class TestShow:
             data=[[i] for i in range(8)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(8)],
+            name="T",
         )
         t.show()
         lines = capsys.readouterr().out.strip().splitlines()
@@ -329,6 +336,7 @@ class TestShow:
             data=[[i] for i in range(20)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(20)],
+            name="T",
         )
         t.show(head=None, tail=None)
         lines = capsys.readouterr().out.strip().splitlines()
@@ -339,6 +347,7 @@ class TestShow:
             data=[[i] for i in range(20)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(20)],
+            name="T",
         )
         t.show(rows=3)
         lines = capsys.readouterr().out.strip().splitlines()
