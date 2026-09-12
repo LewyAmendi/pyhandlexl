@@ -22,6 +22,16 @@ def sample():
 
 
 class TestConstruction:
+    def test_name_defaults_to_none(self):
+        assert Table(data=[["1"]]).name is None
+
+    def test_name_is_stored(self):
+        assert Table(data=[["1"]], name="Sales").name == "Sales"
+
+    def test_repr_includes_name_when_set(self):
+        assert "name='Sales'" in repr(Table(data=[["1"]], name="Sales"))
+        assert "name=" not in repr(Table(data=[["1"]]))
+
     def test_mismatched_row_labels_raise(self):
         with pytest.raises(ValueError):
             Table(data=[["1"]], column_headers=["a"], row_labels=["x", "y"])

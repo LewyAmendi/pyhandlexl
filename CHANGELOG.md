@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-12
+
+### Added
+- **Named tables — multiple `Table`s on one worksheet.** A `Table` can now
+  have a `name`. Named tables stack left to right on a sheet with one empty
+  column between them, always starting at row 1.
+  - `Table(..., name="Sales")`
+  - `t.create(path, sheet)` — places a brand-new named table; `TableExistsError`
+    if the name is taken, `SheetNotFoundError` if the sheet doesn't exist.
+  - `Table.read(path, name="Sales")` — finds a table by name; no `sheet=` needed.
+  - `t.write(path)` — writes a named table back to its tracked location
+    (`sheet=` is rejected here — location comes from the schema).
+  - `list_tables(path)` — every named table in the workbook.
+  - `delete_table(path, name)` — removes a named table; leaves the space empty
+    (no shifting) and frees the name for reuse.
+  - Growing a table's columns automatically shifts every table to its right
+    on the same sheet; growing rows never shifts anything.
+  - Each table's first cell holds a literal `"TABLE NAME"` marker plus its
+    name; a workbook-wide schema sheet (`_pyhandlexl_tables`, reserved) caches
+    positions. Reads/writes verify the marker before trusting the cached
+    position and self-heal (and may write, even on a "read") if a table has
+    moved; `TableNotFoundError` if it can't be found at all.
+  - Table names are unique per workbook. Duplicate row labels/column headers
+    within one named table are blocked the same as for a whole-sheet `Table`.
+- `Table.show(*, rows=None, head=5, tail=5)` — print a table to the console as
+  a plain aligned grid. Defaults to the first and last 5 rows (everything, if
+  10 rows or fewer); pass `head=None, tail=None` for every row. A debug
+  convenience, unrelated to cell formatting in the workbook.
+- `TableNotFoundError(PyhandlexlError, KeyError)` and
+  `TableExistsError(PyhandlexlError, ValueError)`.
+
+### Changed
+- Whole-sheet `Table` usage (no `name`) is completely unaffected — this is
+  purely additive.
+
 ## [0.4.0] — 2026-09-10
 
 ### Changed
@@ -122,7 +157,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.1...v0.2.3

@@ -30,3 +30,11 @@ class SheetNotFoundError(PyhandlexlError, KeyError):
 
 class CellTypeError(PyhandlexlError, TypeError):
     """A cell value is not a type Excel can store."""
+
+
+class TableNotFoundError(PyhandlexlError, KeyError):
+    """No named table with this name exists, or its marker cannot be found."""
+
+
+class TableExistsError(PyhandlexlError, ValueError):
+    """A named table with this name already exists in the workbook."""

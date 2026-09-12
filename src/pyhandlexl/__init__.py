@@ -6,8 +6,10 @@ from pyhandlexl.core import (
     create_sheet,
     create_workbook,
     delete_sheet,
+    delete_table,
     delete_workbook,
     list_sheets,
+    list_tables,
     read_sheet,
     rename_sheet,
     sheet_exists,
@@ -21,6 +23,8 @@ from pyhandlexl.errors import (
     PyhandlexlError,
     SheetNameError,
     SheetNotFoundError,
+    TableExistsError,
+    TableNotFoundError,
 )
 from pyhandlexl.table import Table, TableData
 from pyhandlexl.validate import (
@@ -30,7 +34,7 @@ from pyhandlexl.validate import (
     is_valid_xlsx,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "CellTypeError",
@@ -42,6 +46,8 @@ __all__ = [
     "SheetNotFoundError",
     "Table",
     "TableData",
+    "TableExistsError",
+    "TableNotFoundError",
     "append_rows",
     "check_cell_value",
     "check_dimensions",
@@ -49,10 +55,12 @@ __all__ = [
     "create_sheet",
     "create_workbook",
     "delete_sheet",
+    "delete_table",
     "delete_workbook",
     "grid",
     "is_valid_xlsx",
     "list_sheets",
+    "list_tables",
     "read_sheet",
     "rename_sheet",
     "sheet_exists",

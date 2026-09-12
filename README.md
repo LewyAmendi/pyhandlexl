@@ -25,10 +25,15 @@ t.add_row("Q3", [120, 90, 60])
 t.write("budget.xlsx")                        # safe, atomic write
 ```
 
-- **`Table`** — a worksheet as a labelled table: column headers, row labels, and
-  a data grid you address by name.
-- **`read_sheet` / `write_sheet`** — raw grid access for sheets that are not a
-  clean table.
+`pyhandlexl` splits cleanly in two, by how organised your data is:
+
+- **Organised data → [`Table`](#organised-data-the-table-class).** Your sheet
+  has column headers and row labels — a real table. Address everything by
+  name (`t.read_cell(row="Revenue", column="North")`), not by cell position.
+- **Unorganised data → [the grid layout](#unorganised-data-the-grid-layout).**
+  Plain grids, exports, odd one-off dumps — no headers or labels to name.
+  `read_sheet`/`write_sheet` give you a `list[list]`; `pyhandlexl.grid` edits
+  it by position.
 
 > **Under active development.** Usable today — expect new capabilities with each
 > release, and some API changes before it stabilises. See the
@@ -83,13 +88,19 @@ Table(data=[[10, 20]], column_headers=["q1", "q2"], row_labels=["Alice"]).write(
 > to `str`, since you address rows and columns by name. See
 > [round-trip notes](#round-trip-notes) for the small type changes Excel forces.
 
-## The `Table` class
+## Organised data: the `Table` class
 
-A `Table` treats a worksheet as structured data: row 1 is the column headers,
-column A is the row labels, `A1` is the corner, and everything from `B2` on is
-the data. You work with it by name — rows, columns, and cells are addressed by
-their label, not their position — and it stays in sync as you add, drop, or
-rename rows and columns.
+**Use this when your data has structure — column headers and row labels
+that name what's in each cell.** A `Table` treats a worksheet as exactly
+that: row 1 is the column headers, column A is the row labels, `A1` is the
+corner, and everything from `B2` on is the data. You work with it by name —
+rows, columns, and cells are addressed by their label, not their position —
+and it stays in sync as you add, drop, or rename rows and columns. A
+worksheet can hold more than one `Table` — see
+[Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet).
+
+If your sheet is just a plain grid with nothing to name, skip ahead to
+[Unorganised data: the grid layout](#unorganised-data-the-grid-layout) instead.
 
 ### Reading
 
@@ -220,26 +231,95 @@ Row count and row-label membership go through `t.data` instead of `len()`/`in`,
 so the call site says what's being checked: `len(t.data.rows)`,
 `"Bob" in t.data.row_labels`.
 
-## Files
+### Multiple named tables on one sheet
 
-`pyhandlexl` **never creates a file implicitly** — this is deliberate, so a
-typo in a path can't silently produce a stray workbook.
+A `Table` can have a **name**, which lets several tables live on the same
+worksheet — a "Sales" table and an "Inventory" table side by side, for
+example. Tables stack **left to right** with exactly one empty column between
+them, and always start at row 1.
 
 ```python
-create_workbook(path, *, sheet="Sheet")   # FileExistsError if the path is taken
-delete_workbook(path)                      # FileNotFoundError if it isn't there
+from pyhandlexl import Table, create_workbook, create_sheet
+
+create_workbook("shop.xlsx")
+create_sheet("shop.xlsx", "Data")
+
+sales = Table(
+    data=[[100, 200], [150, 250]],
+    column_headers=["North", "South"],
+    row_labels=["Q1", "Q2"],
+    name="Sales",
+)
+sales.create("shop.xlsx", sheet="Data")          # first placement — explicit
+
+inventory = Table(data=[[10], [20]], column_headers=["Units"], row_labels=["A", "B"], name="Inventory")
+inventory.create("shop.xlsx", sheet="Data")       # lands to the right of Sales
+
+sales = Table.read("shop.xlsx", name="Sales")     # no sheet= needed — the name finds it
+sales.add_column("East", [300, 350])
+sales.write("shop.xlsx")                          # Inventory shifts right automatically
 ```
 
-`create_workbook` makes a new empty `.xlsx` with one worksheet. `delete_workbook`
-removes a workbook file, retrying while it is locked (open in Excel) before
-raising `FileLockedError`, and refuses a path that isn't an Excel extension.
+- **`t.create(path, sheet)`** — places a *new* named table. `TableExistsError`
+  if the name is already taken; `SheetNotFoundError` if `sheet` doesn't exist.
+- **`Table.read(path, name=...)`** — finds a named table by name; `sheet=` is
+  not needed (or accepted with `name=`) since the table's location is tracked
+  for you. `TableNotFoundError` if there's no table by that name.
+- **`t.write(path)`** — writes a named table back to its tracked location. The
+  table must already exist (`.create()` first) — `TableNotFoundError`
+  otherwise. `sheet=` is rejected here too, for the same reason.
+- **`list_tables(path)`** — every named table in the workbook, across all sheets.
+- **`delete_table(path, name)`** — removes a named table; `TableNotFoundError`
+  if it doesn't exist. Leaves the space empty — other tables on the sheet are
+  not shifted to close the gap, and the name is free to reuse afterwards.
+- Table names are **unique per workbook**, not per sheet.
+- **Growing a table's columns** (`add_column`, or writing back wider data)
+  automatically shifts every table to its right, on the same sheet, further
+  right to make room — this can rewrite more than one table's position in a
+  single `.write()`. **Growing rows never shifts anything**, since nothing sits
+  below a table.
+- **Duplicate row labels/column headers within one table** are blocked exactly
+  as they are for a whole-sheet `Table` — nothing new to learn there.
 
-Every write operation — `write_sheet`, `append_rows`, `create_sheet`,
-`Table.write` — raises `FileNotFoundError` if the file does not exist yet.
+**How it stays correct if you edit the sheet by hand.** Every named table's
+first cell literally contains the text `"TABLE NAME"`, with the table's name
+in the cell beside it. Before trusting its tracked position, `pyhandlexl`
+checks that marker is still there. If someone has inserted or deleted columns
+by hand and it's moved, `pyhandlexl` scans that sheet, finds it by its marker,
+and repairs the tracked position — this can make `Table.read` write to the
+file even though it looks like a pure read. If the marker is gone entirely
+(the table was deleted, or the name cell was overwritten), you get
+`TableNotFoundError` rather than silently wrong data. This self-heal only
+recovers a *moved* table on its *original* sheet — if a table was deleted, cut
+to a different sheet, or resized by hand, `pyhandlexl` reports it missing
+rather than guessing further.
 
-## The raw layer
+The tracking data itself lives in a reserved worksheet, `_pyhandlexl_tables`
+— it shows up in `list_sheets()` like any other sheet. Leave it alone.
 
-For sheets that are not a labelled table — plain grids, exports, odd layouts.
+### Displaying a table
+
+```python
+t.show()                     # default: first 5 and last 5 rows, "..." between
+t.show(rows=10)               # only the first 10 data rows
+t.show(head=2, tail=2)        # first 2 and last 2 rows
+t.show(head=None, tail=None)  # every row, no truncation
+```
+
+The default (`head=5, tail=5`) shows everything with no divider if the table
+has 10 rows or fewer — truncation only kicks in past that. `rows=` overrides
+the head/tail defaults outright. Prints a plain, aligned, whitespace-padded
+grid to the console — a debug convenience, unrelated to cell formatting in the
+`.xlsx` (still out of scope; see [Not in scope](#not-in-scope)).
+
+## Unorganised data: the grid layout
+
+**Use this when your data has no headers or labels to name — a plain grid,
+an export, an odd one-off layout.** There's nothing here to address by name,
+so everything works by position: a `list[list]` you read, edit by row/column
+index, and write back. If your sheet *does* have column headers and row
+labels, use [`Table`](#organised-data-the-table-class) instead — it'll save
+you from re-inventing header/label handling by hand.
 
 ```python
 from pyhandlexl import read_sheet, write_sheet, append_rows
@@ -301,11 +381,29 @@ take `values` require `len(values)` to equal the row count; out-of-range
 indices raise `IndexError`. Gaps introduced by any of these (padding a short
 row, `pad`, `transpose`) are filled with `None`.
 
+## Files
+
+Applies whether you're working with organised or unorganised data.
+`pyhandlexl` **never creates a file implicitly** — this is deliberate, so a
+typo in a path can't silently produce a stray workbook.
+
+```python
+create_workbook(path, *, sheet="Sheet")   # FileExistsError if the path is taken
+delete_workbook(path)                      # FileNotFoundError if it isn't there
+```
+
+`create_workbook` makes a new empty `.xlsx` with one worksheet. `delete_workbook`
+removes a workbook file, retrying while it is locked (open in Excel) before
+raising `FileLockedError`, and refuses a path that isn't an Excel extension.
+
+Every write operation — `write_sheet`, `append_rows`, `create_sheet`,
+`Table.write` — raises `FileNotFoundError` if the file does not exist yet.
+
 ## Sheet management
 
 ```python
 from pyhandlexl import (
-    list_sheets, sheet_exists, create_sheet, delete_sheet, rename_sheet,
+    list_sheets, sheet_exists, create_sheet, delete_sheet, rename_sheet, list_tables,
 )
 
 list_sheets(path)                 # ['Sheet', 'Data']
@@ -313,6 +411,7 @@ sheet_exists(path, "Data")        # True
 create_sheet(path, "Results")     # ValueError if it already exists
 delete_sheet(path, "Old")         # refuses to delete the last sheet
 rename_sheet(path, "Old", "New")
+list_tables(path)                 # every named table in the workbook (all sheets)
 ```
 
 `create_sheet` needs an existing file (`create_workbook` first). Sheet names are
@@ -361,6 +460,8 @@ All raised exceptions derive from `PyhandlexlError`:
 | `SheetNotFoundError` | `KeyError` | no worksheet with that name |
 | `FileLockedError` | `OSError` | file stayed locked through every retry |
 | `CellTypeError` | `TypeError` | a value is not a type Excel can store |
+| `TableNotFoundError` | `KeyError` | no named table with that name, or its marker is gone |
+| `TableExistsError` | `ValueError` | a named table with that name already exists |
 | `InvalidFileError` | — | file is missing or not a readable `.xlsx` |
 
 ## Not in scope
@@ -381,4 +482,4 @@ ruff check . && ruff format --check .
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/LewyAmendi/pyhandlexl/blob/main/LICENSE).

@@ -5,17 +5,25 @@ labels, cell A1 is the "corner", and the data region is everything from B2
 onward. Row labels, column headers, and the corner are always strings; data
 values keep their type. Positional access uses Excel coordinates (row 1 is the
 header row, column 1 is the label column).
+
+A Table may also have a *name*, which lets more than one Table live on the
+same worksheet — see :meth:`Table.create` and the ``name=`` argument to
+:meth:`Table.read`.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from openpyxl.utils import coordinate_to_tuple
 
+from pyhandlexl import _multi_table as mt
+from pyhandlexl._safety import atomic_save, safe_load
 from pyhandlexl.core import read_sheet, write_sheet
+from pyhandlexl.errors import SheetNotFoundError
+from pyhandlexl.validate import check_cell_value, check_dimensions
 
 
 def _to_label(value: object) -> str:
@@ -48,11 +56,13 @@ class Table:
         column_headers: Iterable[str] = (),
         row_labels: Iterable[str] = (),
         corner: str = "",
+        name: str | None = None,
     ) -> None:
         self._data: list[list[object]] = [list(row) for row in data]
         self._column_headers: list[str] = list(column_headers)
         self._row_labels: list[str] = list(row_labels)
         self._corner: str = corner
+        self._name: str | None = name
         self._validate()
 
     def _validate(self) -> None:
@@ -85,17 +95,29 @@ class Table:
         path: str | Path,
         sheet: str | None = None,
         *,
+        name: str | None = None,
         column_headers: bool = True,
         row_labels: bool = True,
     ) -> Table:
-        """Read a worksheet into a Table.
+        """Read a worksheet, or one named table on it, into a Table.
 
         Args:
             path: the .xlsx file.
-            sheet: worksheet name, or ``None`` for the active sheet.
-            column_headers: treat row 1 as column headers.
-            row_labels: treat column A as row labels.
+            sheet: worksheet name, or ``None`` for the active sheet. Ignored
+                if *name* is given — a named table's sheet comes from the
+                schema.
+            name: read the named table called *name* instead of the whole
+                sheet. See :meth:`create` for how named tables are made.
+            column_headers: treat row 1 as column headers (whole-sheet mode only).
+            row_labels: treat column A as row labels (whole-sheet mode only).
+
+        Raises:
+            TableNotFoundError: *name* is given but no such table exists, or
+                its marker cannot be found on its recorded sheet.
         """
+        if name is not None:
+            return cls._read_named(path, name)
+
         grid = read_sheet(path, sheet, pad=True)
         if not grid:
             return cls([], [], [], "")
@@ -110,7 +132,43 @@ class Table:
 
         return cls(data, headers, labels, corner)
 
+    @classmethod
+    def _read_named(cls, path: str | Path, name: str) -> Table:
+        workbook = safe_load(path)
+        try:
+            entries = mt.load_schema(workbook)
+            entry = mt.get_entry(entries, name)
+            located = mt.verify_or_locate(workbook, entry)
+            healed = located != entry
+
+            ws = workbook[located.sheet]
+            block = mt.read_region(
+                ws,
+                located.anchor_row + 1,
+                located.anchor_col,
+                located.n_rows + 1,
+                located.n_cols + 1,
+            )
+            corner = _to_label(block[0][0])
+            headers = [_to_label(h) for h in block[0][1:]]
+            labels = [_to_label(row[0]) for row in block[1:]]
+            data = [list(row[1:]) for row in block[1:]]
+            table = cls(data, headers, labels, corner, name=name)
+
+            if healed:
+                entries[name] = located
+                mt.save_schema(workbook, entries)
+                atomic_save(workbook, path)
+            return table
+        finally:
+            workbook.close()
+
     # ------------------------------------------------------------ properties
+
+    @property
+    def name(self) -> str | None:
+        """This table's name, or ``None`` if it isn't a named (multi-table) table."""
+        return self._name
 
     @property
     def corner(self) -> str:
@@ -367,6 +425,50 @@ class Table:
             raise ValueError(f"column header {new!r} already exists")
         self._column_headers[j] = new
 
+    # --------------------------------------------------------------- display
+
+    def show(self, *, rows: int | None = None, head: int | None = 5, tail: int | None = 5) -> None:
+        """Print the table to the console as a plain aligned grid.
+
+        By default, prints the first 5 and last 5 rows with a ``...`` divider
+        between them (nothing is hidden if the table has 10 rows or fewer).
+        ``rows=n`` overrides that and prints only the first *n* data rows.
+        To print every row, pass ``head=None, tail=None`` explicitly. This is
+        a console convenience only — it has nothing to do with cell formatting
+        in the workbook.
+        """
+        data = self._data
+        labels = self._row_labels
+        divider_after: int | None = None
+
+        if rows is not None:
+            data = data[:rows]
+            labels = labels[:rows] if labels else labels
+        elif head is not None or tail is not None:
+            h, t = head or 0, tail or 0
+            if h + t >= len(data):
+                pass
+            else:
+                data = data[:h] + data[len(data) - t :]
+                labels = labels[:h] + labels[len(labels) - t :] if labels else labels
+                divider_after = h
+
+        grid: list[list[str]] = []
+        if self._column_headers:
+            grid.append([self._corner, *self._column_headers])
+        for i, row in enumerate(data):
+            label = labels[i] if i < len(labels) else ""
+            grid.append([label, *("" if v is None else str(v) for v in row)])
+            if divider_after is not None and i == divider_after - 1 and divider_after < len(data):
+                grid.append(["..." for _ in grid[-1]])
+
+        if not grid:
+            print("(empty table)")
+            return
+        widths = [max(len(row[c]) for row in grid) for c in range(len(grid[0]))]
+        for row in grid:
+            print("  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)))
+
     # ----------------------------------------------------------------- write
 
     def _assemble(self) -> list[list[object]]:
@@ -382,14 +484,120 @@ class Table:
         return grid
 
     def write(self, path: str | Path, sheet: str | None = None) -> None:
-        """Write the table to *path*, reassembling headers into row 1 and labels into column A.
+        """Write the table to *path*.
 
-        The file must already exist — create it first with
-        :func:`pyhandlexl.create_workbook` (``FileNotFoundError`` otherwise).
+        Without a name: reassembles headers into row 1 and labels into
+        column A, and writes the whole sheet (other sheets untouched). The
+        file must already exist (:func:`pyhandlexl.create_workbook` first).
+
+        With a name: the table must already exist (see :meth:`create`) —
+        *sheet* is not accepted here, since a named table's location comes
+        from the schema. Writes back to its recorded position, growing it in
+        place; if it needs more columns than before, every table to its right
+        on the same sheet is shifted over to make room.
+
         Every data value must be a type Excel can store (``CellTypeError``
         otherwise) — the check happens here, not when values are set.
         """
-        write_sheet(path, self._assemble(), sheet)
+        if self._name is None:
+            write_sheet(path, self._assemble(), sheet)
+            return
+        if sheet is not None:
+            raise TypeError(
+                "sheet= is not used for a named table; its location comes from the schema"
+            )
+        self._write_named(path)
+
+    def _write_named(self, path: str | Path) -> None:
+        workbook = safe_load(path)
+        try:
+            entries = mt.load_schema(workbook)
+            entry = mt.get_entry(entries, self._name)
+            entry = mt.verify_or_locate(workbook, entry)
+            entries[self._name] = entry
+
+            assembled = self._assemble()
+            for row in assembled:
+                for value in row:
+                    check_cell_value(value)
+
+            new_n_rows = len(self._data)
+            new_n_cols = self._width()
+
+            growth = new_n_cols - entry.n_cols
+            if growth > 0:
+                neighbours = mt.tables_to_shift(entries, entry)
+                if neighbours:
+                    rightmost = max(e.anchor_col + e.width - 1 for e in neighbours) + growth
+                    check_dimensions(1, rightmost)
+                mt.shift_right(workbook, entries, entry, growth)
+
+            check_dimensions(entry.anchor_row + new_n_rows + 1, entry.anchor_col + new_n_cols)
+
+            ws = workbook[entry.sheet]
+            old_height, old_width = entry.height, entry.width
+            new_height, new_width = new_n_rows + 2, new_n_cols + 1
+            mt.clear_region(
+                ws,
+                entry.anchor_row,
+                entry.anchor_col,
+                max(old_height, new_height),
+                max(old_width, new_width),
+            )
+            mt.write_region(ws, entry.anchor_row, entry.anchor_col, [[mt.MARKER, self._name]])
+            mt.write_region(ws, entry.anchor_row + 1, entry.anchor_col, assembled)
+
+            entries[self._name] = replace(entry, n_rows=new_n_rows, n_cols=new_n_cols)
+            mt.save_schema(workbook, entries)
+            atomic_save(workbook, path)
+        finally:
+            workbook.close()
+
+    def create(self, path: str | Path, sheet: str) -> None:
+        """Place this table as a brand-new named table on *sheet*.
+
+        Requires ``name`` to be set (``Table(..., name=...)``). Tables on a
+        sheet stack left to right with one empty column between them, always
+        starting at row 1.
+
+        Raises:
+            ValueError: this table has no name.
+            TableExistsError: a table named this already exists in the workbook.
+            SheetNotFoundError: *sheet* does not exist.
+            CellTypeError: a data value is not a type Excel can store.
+            DimensionError: the placed table would exceed Excel's grid limits.
+        """
+        if self._name is None:
+            raise ValueError("set a name (Table(..., name=...)) to create a named table")
+
+        workbook = safe_load(path)
+        try:
+            if sheet not in workbook.sheetnames:
+                raise SheetNotFoundError(sheet)
+            entries = mt.load_schema(workbook)
+            mt.check_not_exists(entries, self._name)
+
+            assembled = self._assemble()
+            for row in assembled:
+                for value in row:
+                    check_cell_value(value)
+
+            anchor_row, anchor_col = mt.find_placement(entries, sheet)
+            n_rows = len(self._data)
+            n_cols = self._width()
+            check_dimensions(anchor_row + n_rows + 1, anchor_col + n_cols)
+
+            ws = workbook[sheet]
+            mt.write_region(ws, anchor_row, anchor_col, [[mt.MARKER, self._name]])
+            mt.write_region(ws, anchor_row + 1, anchor_col, assembled)
+
+            entries[self._name] = mt.TableEntry(
+                self._name, sheet, anchor_row, anchor_col, n_rows, n_cols
+            )
+            mt.save_schema(workbook, entries)
+            atomic_save(workbook, path)
+        finally:
+            workbook.close()
 
     # --------------------------------------------------------------- dunders
 
@@ -404,7 +612,8 @@ class Table:
         )
 
     def __repr__(self) -> str:
+        name_part = f"name={self._name!r}, " if self._name is not None else ""
         return (
-            f"Table(rows={len(self._data)}, columns={len(self._column_headers)}, "
+            f"Table({name_part}rows={len(self._data)}, columns={len(self._column_headers)}, "
             f"corner={self._corner!r})"
         )
