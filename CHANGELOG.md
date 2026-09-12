@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-12
+
+### Changed
+- **BREAKING: every `Table` now requires a `name`, and is tracked by name —
+  not by sheet.** Whole-sheet `Table` usage is retired.
+  - `Table(...)` now takes a required, keyword-only `name`.
+  - A table is placed once with `t.create(path, sheet)` — `TableExistsError`
+    if the name is taken, `SheetNotFoundError` if the sheet doesn't exist.
+  - `Table.read(path, name)` — finds a table by name anywhere in the
+    workbook; `sheet=` is gone, since the name is enough.
+  - `t.write(path)` — writes a table back to its tracked location;
+    `sheet=` is gone here too. `TableNotFoundError` if `.create()` was never
+    called for it.
+  - The `column_headers=False` / `row_labels=False` reading modes are gone —
+    every table always has both.
+  - Several named tables can share one worksheet — see
+    [Multiple named tables on one sheet](README.md#multiple-named-tables-on-one-sheet).
+    Tables stack left to right with one empty column between them, always
+    starting at row 1. Growing a table's columns shifts every table to its
+    right on the same sheet; growing rows never shifts anything.
+  - `list_tables(path)` — every named table in the workbook.
+  - `delete_table(path, name)` — removes a named table; leaves the space empty
+    (no shifting) and frees the name for reuse.
+  - Each table's first cell holds a literal `"TABLE NAME"` marker plus its
+    name; a workbook-wide schema sheet (`_pyhandlexl_tables`, reserved) caches
+    positions. Reads/writes verify the marker before trusting the cached
+    position and self-heal (and may write, even on a "read") if a table has
+    moved; `TableNotFoundError` if it can't be found at all.
+  - Table names are unique per workbook. Duplicate row labels/column headers
+    within one table are blocked the same as before.
+
+### Added
+- `Table.show(*, rows=None, head=5, tail=5)` — print a table to the console as
+  a plain aligned grid. Defaults to the first and last 5 rows (everything, if
+  10 rows or fewer); pass `head=None, tail=None` for every row. A debug
+  convenience, unrelated to cell formatting in the workbook.
+- `TableNotFoundError(PyhandlexlError, KeyError)` and
+  `TableExistsError(PyhandlexlError, ValueError)`.
+
 ## [0.4.0] — 2026-09-10
 
 ### Changed
@@ -122,7 +161,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.2.1...v0.2.3

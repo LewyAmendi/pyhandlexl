@@ -9,6 +9,7 @@ from typing import Literal
 
 from openpyxl import Workbook
 
+from pyhandlexl import _multi_table as mt
 from pyhandlexl._safety import atomic_save, safe_delete, safe_load
 from pyhandlexl.errors import SheetNotFoundError
 from pyhandlexl.validate import check_cell_value, check_dimensions, check_sheet_name
@@ -225,6 +226,44 @@ def list_sheets(path: str | Path) -> list[str]:
     workbook = safe_load(path)
     try:
         return list(workbook.sheetnames)
+    finally:
+        workbook.close()
+
+
+def list_tables(path: str | Path) -> list[str]:
+    """Return the names of every named table in the workbook (see ``Table.create``).
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        InvalidFileError: the file is not a readable .xlsx.
+    """
+    workbook = safe_load(path)
+    try:
+        return list(mt.load_schema(workbook).keys())
+    finally:
+        workbook.close()
+
+
+def delete_table(path: str | Path, name: str) -> None:
+    """Remove the named table called *name*.
+
+    The space it occupied is left empty — other tables on the sheet are not
+    shifted to close the gap.
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        TableNotFoundError: no table named *name*, or its marker cannot be found.
+    """
+    workbook = safe_load(path)
+    try:
+        entries = mt.load_schema(workbook)
+        entry = mt.get_entry(entries, name)
+        entry = mt.verify_or_locate(workbook, entry)
+        ws = workbook[entry.sheet]
+        mt.clear_region(ws, entry.anchor_row, entry.anchor_col, entry.height, entry.width)
+        del entries[name]
+        mt.save_schema(workbook, entries)
+        atomic_save(workbook, path)
     finally:
         workbook.close()
 
