@@ -26,12 +26,16 @@ def _width(grid: Grid) -> int:
 
 
 def _check_row(grid: Grid, row: int, *, extra: int = 0) -> None:
+    if not isinstance(row, int):
+        raise TypeError(f"row must be int, got {type(row).__name__}: {row!r}")
     upper = len(grid) + extra
     if not 1 <= row <= upper:
         raise IndexError(f"row {row} is out of range (1..{upper})")
 
 
 def _check_column(grid: Grid, col: int, *, extra: int = 0) -> None:
+    if not isinstance(col, int):
+        raise TypeError(f"col must be int, got {type(col).__name__}: {col!r}")
     upper = _width(grid) + extra
     if not 1 <= col <= upper:
         raise IndexError(f"column {col} is out of range (1..{upper})")
@@ -180,3 +184,59 @@ def transpose(grid: Iterable[Iterable[object]]) -> Grid:
     if not out:
         return []
     return [list(column) for column in zip(*out, strict=True)]
+
+
+# ----------------------------------------------------------------- display
+
+
+def show(
+    grid: Iterable[Iterable[object]],
+    *,
+    rows: int | None = None,
+    head: int | None = 5,
+    tail: int | None = 5,
+) -> None:
+    """Print a grid to the console as a plain aligned block.
+
+    Same truncation rules as ``Table.show``: by default the first 5 and last
+    5 rows with a ``...`` divider between them (nothing hidden at 10 rows or
+    fewer). ``rows=n`` overrides that and prints only the first *n* rows; pass
+    ``head=None, tail=None`` for every row. A console convenience only — it
+    doesn't touch the grid. Ragged rows are padded with ``""`` for display.
+    """
+    for param_name, value in (("rows", rows), ("head", head), ("tail", tail)):
+        if value is None:
+            continue
+        if not isinstance(value, int):
+            raise TypeError(f"{param_name} must be int, got {type(value).__name__}: {value!r}")
+        if value < 0:
+            raise ValueError(f"{param_name} must not be negative, got {value}")
+
+    data = _copy(grid)
+    if not data:
+        print("(empty grid)")
+        return
+
+    divider_after: int | None = None
+    if rows is not None:
+        data = data[:rows]
+    elif head is not None or tail is not None:
+        h, t = head or 0, tail or 0
+        if h + t < len(data):
+            data = data[:h] + data[len(data) - t :]
+            divider_after = h
+
+    if not data:
+        return
+
+    width = _width(data)
+    display_rows: list[list[str]] = []
+    for i, row in enumerate(data):
+        padded = row + [None] * (width - len(row))
+        display_rows.append(["" if v is None else str(v) for v in padded])
+        if divider_after is not None and i == divider_after - 1 and divider_after < len(data):
+            display_rows.append(["..."] * width)
+
+    col_widths = [max(len(r[c]) for r in display_rows) for c in range(width)]
+    for row in display_rows:
+        print("  ".join(cell.ljust(w) for cell, w in zip(row, col_widths, strict=True)))

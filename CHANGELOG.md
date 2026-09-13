@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-13
+
+### Added
+- `grid.show()` — print a grid to the console as a plain aligned block, with
+  the same truncation rules as `Table.show()` (first/last 5 rows by default,
+  `rows=`/`head=`/`tail=` to override). A console convenience only.
+
+### Changed
+- **BREAKING: `column_headers=` is now a required, keyword-only argument.**
+  A table's columns are its schema — every `Table` needs them, even before
+  its first row. `data` now defaults to empty, so building one up before
+  placing it is just `Table(column_headers=[...], name="...")`. The
+  positional-data-only "grid" construction mode (no headers, no labels) is
+  retired — it could never round-trip through `create()`/`write()`/`read()`
+  correctly anyway; use the grid layout for genuinely positional data.
+  `drop_column` now refuses to remove a table's last remaining column.
+
+### Fixed
+- **Data corruption on `create()`/`write()` for a table with headers but no
+  rows yet.** The corner cell was omitted from the persisted header row
+  whenever `row_labels` happened to be empty, silently shifting every column
+  header over by one on read-back. Building a table's columns before its
+  first `add_row()` — the README's own "build a table from nothing" pattern —
+  triggered this.
+- `Table(...)` now raises `ValueError` if it's given data with row labels
+  missing or the wrong length — that combination could never round-trip
+  through `create()`/`write()`/`read()`.
+- A bare `str` passed for `column_headers`, `row_labels`, or `data` no longer
+  silently iterates into one column/row per character — `Table(...)` now
+  raises `TypeError` instead (`column_headers="ab"` used to quietly become
+  two headers, `"a"` and `"b"`).
+- `read_cell`/`set_cell` with a malformed `ref` (`""`, `"not a ref"`) now
+  raise a clear `ValueError` instead of leaking an internal
+  `UnboundLocalError` or a raw `int()` parsing error.
+- `insert_row`/`insert_column` with a non-`int` `position`, and every `grid`
+  function taking a row/column number, now raise a clear `TypeError` instead
+  of a raw comparison/`list.insert` error.
+- `Table.from_dict` with a non-mapping argument, or a non-mapping value for
+  one of its rows, now raises a clear `TypeError` instead of a raw
+  `AttributeError`/`TypeError` from the internal `dict()` conversion.
+- `Table.read`/`write` and `delete_table` now raise `TypeError` for a
+  non-`str` `name` instead of silently reporting `TableNotFoundError`.
+- `Table.show(rows=..., head=..., tail=...)` now rejects a negative or
+  non-`int` value instead of silently producing a confusing result via
+  Python's slice semantics (`rows=-1` used to mean "every row but the last").
+
 ## [0.6.0] — 2026-09-13
 
 ### Added
@@ -177,7 +223,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.3.0...v0.4.0

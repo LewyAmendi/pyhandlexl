@@ -47,20 +47,35 @@ class TableData:
 class Table:
     """A named table, always with column headers, row labels, and a corner.
 
-    Construct directly from parts (``name=`` required), or with :meth:`read`
-    from a file. Mutation methods edit the table in place and return
-    ``None``. Row labels and column headers are always ``str``.
+    Construct directly from parts (``column_headers=`` and ``name=`` are
+    required; a table with no rows yet still needs its columns defined), or
+    with :meth:`read` from a file. Mutation methods edit the table in place
+    and return ``None``. Row labels and column headers are always ``str``.
     """
 
     def __init__(
         self,
-        data: Iterable[Iterable[object]],
-        column_headers: Iterable[str] = (),
+        data: Iterable[Iterable[object]] = (),
         row_labels: Iterable[str] = (),
         corner: str = "",
         *,
+        column_headers: Iterable[str],
         name: str,
     ) -> None:
+        # A bare str is technically Iterable[str] — iterating it silently splits
+        # it into one column/row per character. That's never what's meant, so
+        # it's rejected outright rather than left as a silent footgun.
+        for value, what in (
+            (data, "data"),
+            (column_headers, "column_headers"),
+            (row_labels, "row_labels"),
+        ):
+            if isinstance(value, (str, bytes)):
+                raise TypeError(
+                    f"{what} must be a sequence of items, not a single "
+                    f"{type(value).__name__} ({value!r}) — iterating it would split "
+                    "it into individual characters"
+                )
         self._data: list[list[object]] = [list(row) for row in data]
         self._column_headers: list[str] = list(column_headers)
         self._row_labels: list[str] = list(row_labels)
@@ -81,18 +96,24 @@ class Table:
                 raise TypeError(
                     f"column headers must be str, got {type(header).__name__}: {header!r}"
                 )
+        if not self._column_headers:
+            raise ValueError("column_headers must not be empty")
         if not isinstance(self._corner, str):
             got = type(self._corner).__name__
             raise TypeError(f"corner must be str, got {got}: {self._corner!r}")
         if self._row_labels and len(self._row_labels) != len(self._data):
             raise ValueError(f"{len(self._data)} data rows but {len(self._row_labels)} row labels")
-        if self._column_headers:
-            width = len(self._column_headers)
-            for i, row in enumerate(self._data):
-                if len(row) != width:
-                    raise ValueError(
-                        f"data row {i} has {len(row)} values but there are {width} column headers"
-                    )
+        if self._data and not self._row_labels:
+            raise ValueError(
+                "this table has data but no row labels — give row_labels, or use the "
+                "grid layout for positional-only data"
+            )
+        width = len(self._column_headers)
+        for i, row in enumerate(self._data):
+            if len(row) != width:
+                raise ValueError(
+                    f"data row {i} has {len(row)} values but there are {width} column headers"
+                )
 
     # ------------------------------------------------------------------ read
 
@@ -123,7 +144,7 @@ class Table:
             headers = [_to_label(h) for h in block[0][1:]]
             labels = [_to_label(row[0]) for row in block[1:]]
             data = [list(row[1:]) for row in block[1:]]
-            table = cls(data, headers, labels, corner, name=name)
+            table = cls(data, labels, corner, column_headers=headers, name=name)
 
             if healed:
                 entries[name] = located
@@ -145,10 +166,24 @@ class Table:
 
         The outer keys become the row labels, in order. Every inner dict must
         have the same keys in the same order — that order becomes the column
-        headers (``ValueError`` otherwise).
+        headers (``ValueError`` otherwise). *table* must not be empty — with
+        no rows there's nothing to infer the column headers from; construct
+        the table directly and pass ``column_headers=`` for that.
         """
+        if not isinstance(table, Mapping):
+            raise TypeError(
+                f"table must be a mapping of row label to {{column header: value}}, "
+                f"got {type(table).__name__}"
+            )
         row_labels = list(table.keys())
-        rows = [dict(row) for row in table.values()]
+        rows = []
+        for label, row in table.items():
+            if not isinstance(row, Mapping):
+                raise TypeError(
+                    f"row {label!r} must be a mapping of column header to value, "
+                    f"got {type(row).__name__}"
+                )
+            rows.append(dict(row))
         headers = list(rows[0].keys()) if rows else []
         for label, row in zip(row_labels, rows, strict=True):
             if list(row.keys()) != headers:
@@ -156,7 +191,7 @@ class Table:
                     f"row {label!r} has keys {list(row.keys())!r}, expected {headers!r}"
                 )
         data = [list(row.values()) for row in rows]
-        return cls(data, headers, row_labels, corner, name=name)
+        return cls(data, row_labels, corner, column_headers=headers, name=name)
 
     # ------------------------------------------------------------ properties
 
@@ -228,16 +263,15 @@ class Table:
     # ------------------------------------------------- position/label access
 
     def _width(self) -> int:
-        if self._column_headers:
-            return len(self._column_headers)
-        return len(self._data[0]) if self._data else 0
+        return len(self._column_headers)
 
     def _dimensions(self) -> tuple[int, int, int, int]:
-        row_start = 1 if self._column_headers else 0
+        # Column headers (and so the header row) always exist; the label
+        # column only once the table actually has a labeled row.
         col_start = 1 if self._row_labels else 0
-        n_rows = row_start + len(self._data)
+        n_rows = 1 + len(self._data)
         n_cols = col_start + self._width()
-        return row_start, col_start, n_rows, n_cols
+        return 1, col_start, n_rows, n_cols
 
     def _classify(self, row: int, col_num: int) -> tuple[str, int, int]:
         """Return ``(kind, i, j)`` where *kind* is corner/header/label/data.
@@ -249,7 +283,7 @@ class Table:
         if not (1 <= row <= n_rows and 1 <= col_num <= n_cols):
             raise IndexError(f"cell ({row}, {col_num}) is outside the {n_rows}x{n_cols} table")
 
-        in_header_row = bool(self._column_headers) and row == 1
+        in_header_row = row == 1
         in_label_column = bool(self._row_labels) and col_num == 1
         if in_header_row and in_label_column:
             return "corner", 0, 0
@@ -270,7 +304,10 @@ class Table:
         if ref is not None:
             if row is not None or column is not None:
                 raise TypeError("give either ref or row=/column=, not both")
-            r, c = coordinate_to_tuple(ref)
+            try:
+                r, c = coordinate_to_tuple(ref)
+            except (ValueError, TypeError, UnboundLocalError):
+                raise ValueError(f"invalid cell reference: {ref!r}") from None
             return True, r, c
 
         if row is None or column is None:
@@ -370,9 +407,7 @@ class Table:
             raise TypeError(f"row label must be str, got {type(label).__name__}: {label!r}")
         if label in self._row_labels:
             raise ValueError(f"row label {label!r} already exists")
-        if self._data and not self._row_labels:
-            raise ValueError("this table has no row labels; use the grid layout to add rows")
-        if (self._data or self._column_headers) and len(values) != self._width():
+        if len(values) != self._width():
             raise ValueError(f"expected {self._width()} values, got {len(values)}")
 
     def add_row(self, label: str, values: Iterable[object]) -> None:
@@ -392,6 +427,8 @@ class Table:
         *label* must not already be in use, and ``values`` must match the
         column count.
         """
+        if not isinstance(position, int):
+            raise TypeError(f"position must be int, got {type(position).__name__}: {position!r}")
         new_row = list(values)
         self._check_new_row(label, new_row)
         n = len(self._data)
@@ -405,8 +442,6 @@ class Table:
             raise TypeError(f"column header must be str, got {type(header).__name__}: {header!r}")
         if header in self._column_headers:
             raise ValueError(f"column header {header!r} already exists")
-        if any(self._data) and not self._column_headers:
-            raise ValueError("this table has no column headers; use the grid layout to add columns")
         if len(values) != len(self._data):
             raise ValueError(f"expected {len(self._data)} values, got {len(values)}")
 
@@ -427,6 +462,8 @@ class Table:
         as :meth:`add_column`: *header* must not already be in use, and
         ``values`` must match the row count.
         """
+        if not isinstance(position, int):
+            raise TypeError(f"position must be int, got {type(position).__name__}: {position!r}")
         new_col = list(values)
         self._check_new_column(header, new_col)
         n = len(self._column_headers)
@@ -443,8 +480,14 @@ class Table:
         del self._row_labels[i]
 
     def drop_column(self, header: str) -> None:
-        """Remove the column headed *header*."""
+        """Remove the column headed *header*.
+
+        Raises ``ValueError`` if it's the only column left — a table always
+        has at least one column header.
+        """
         j = self._column_index(header)
+        if len(self._column_headers) == 1:
+            raise ValueError("cannot drop the only remaining column")
         del self._column_headers[j]
         for data_row in self._data:
             del data_row[j]
@@ -479,6 +522,14 @@ class Table:
         a console convenience only — it has nothing to do with cell formatting
         in the workbook.
         """
+        for param_name, value in (("rows", rows), ("head", head), ("tail", tail)):
+            if value is None:
+                continue
+            if not isinstance(value, int):
+                raise TypeError(f"{param_name} must be int, got {type(value).__name__}: {value!r}")
+            if value < 0:
+                raise ValueError(f"{param_name} must not be negative, got {value}")
+
         data = self._data
         labels = self._row_labels
         divider_after: int | None = None
@@ -495,18 +546,13 @@ class Table:
                 labels = labels[:h] + labels[len(labels) - t :] if labels else labels
                 divider_after = h
 
-        grid: list[list[str]] = []
-        if self._column_headers:
-            grid.append([self._corner, *self._column_headers])
+        grid: list[list[str]] = [[self._corner, *self._column_headers]]
         for i, row in enumerate(data):
             label = labels[i] if i < len(labels) else ""
             grid.append([label, *("" if v is None else str(v) for v in row)])
             if divider_after is not None and i == divider_after - 1 and divider_after < len(data):
                 grid.append(["..." for _ in grid[-1]])
 
-        if not grid:
-            print("(empty table)")
-            return
         widths = [max(len(row[c]) for row in grid) for c in range(len(grid[0]))]
         for row in grid:
             print("  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)))
@@ -514,15 +560,13 @@ class Table:
     # ----------------------------------------------------------------- write
 
     def _assemble(self) -> list[list[object]]:
-        grid: list[list[object]] = []
-        if self._column_headers:
-            header_row: list[object] = [self._corner] if self._row_labels else []
-            header_row.extend(self._column_headers)
-            grid.append(header_row)
+        # column_headers is always non-empty and, whenever there's data,
+        # row_labels always matches it in length — both enforced by
+        # _validate() and preserved by every mutator — so the corner and
+        # every row label are always there to use.
+        grid: list[list[object]] = [[self._corner, *self._column_headers]]
         for i, data_row in enumerate(self._data):
-            out_row: list[object] = [self._row_labels[i]] if self._row_labels else []
-            out_row.extend(data_row)
-            grid.append(out_row)
+            grid.append([self._row_labels[i], *data_row])
         return grid
 
     def write(self, path: str | Path) -> None:
