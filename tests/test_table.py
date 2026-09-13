@@ -102,6 +102,55 @@ class TestData:
             sample.corner = 2026
 
 
+class TestToFromDicts:
+    def test_to_dicts(self, sample):
+        assert sample.to_dicts() == [
+            {"North": "100", "South": "200", "East": "150"},
+            {"North": "40", "South": "60", "East": "55"},
+        ]
+
+    def test_to_dicts_excludes_row_labels(self, sample):
+        for row in sample.to_dicts():
+            assert "Revenue" not in row.values()
+            assert set(row) == {"North", "South", "East"}
+
+    def test_to_dicts_duplicate_header_keeps_last_value(self):
+        t = Table(data=[[1, 2]], column_headers=["a", "a"], row_labels=["r"], name="T")
+        assert t.to_dicts() == [{"a": 2}]
+
+    def test_from_dicts(self):
+        t = Table.from_dicts(
+            [{"North": 100, "South": 200}, {"North": 40, "South": 60}],
+            row_labels=["Revenue", "Costs"],
+            corner="Metric",
+            name="T",
+        )
+        assert t.data.column_headers == ["North", "South"]
+        assert t.data.row_labels == ["Revenue", "Costs"]
+        assert t.data.corner == "Metric"
+        assert t.data.rows == [[100, 200], [40, 60]]
+
+    def test_from_dicts_empty(self):
+        t = Table.from_dicts([], name="T")
+        assert t.data.rows == []
+        assert t.data.column_headers == []
+
+    def test_from_dicts_mismatched_keys_raises(self):
+        with pytest.raises(ValueError):
+            Table.from_dicts([{"a": 1, "b": 2}, {"a": 3, "c": 4}], name="T")
+
+    def test_from_dicts_different_key_order_raises(self):
+        with pytest.raises(ValueError):
+            Table.from_dicts([{"a": 1, "b": 2}, {"b": 4, "a": 3}], name="T")
+
+    def test_to_dicts_round_trips_through_from_dicts(self, sample):
+        rebuilt = Table.from_dicts(
+            sample.to_dicts(), row_labels=sample.data.row_labels, corner=sample.corner, name="T"
+        )
+        assert rebuilt.data.rows == sample.data.rows
+        assert rebuilt.data.column_headers == sample.data.column_headers
+
+
 class TestReadPreservesTypesButCoercesLabels:
     def test_numeric_header_and_label_cells_are_coerced_to_str(self, book):
         Table(
@@ -328,6 +377,68 @@ class TestAdd:
     def test_add_column_duplicate_header_raises(self, sample):
         with pytest.raises(ValueError):
             sample.add_column("North", [10, 20])
+
+    def test_insert_row_at_start(self, sample):
+        sample.insert_row(1, "Forecast", [1, 2, 3])
+        assert sample.data.row_labels == ["Forecast", "Revenue", "Costs"]
+        assert sample.data.rows == [[1, 2, 3], ["100", "200", "150"], ["40", "60", "55"]]
+
+    def test_insert_row_in_middle(self, sample):
+        sample.insert_row(2, "Forecast", [1, 2, 3])
+        assert sample.data.row_labels == ["Revenue", "Forecast", "Costs"]
+
+    def test_insert_row_at_end_matches_add_row(self, sample):
+        sample.insert_row(3, "Profit", [60, 140, 95])
+        assert sample.data.row_labels == ["Revenue", "Costs", "Profit"]
+
+    def test_insert_row_out_of_range_raises(self, sample):
+        with pytest.raises(IndexError):
+            sample.insert_row(0, "Forecast", [1, 2, 3])
+        with pytest.raises(IndexError):
+            sample.insert_row(4, "Forecast", [1, 2, 3])
+
+    def test_insert_row_wrong_length_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.insert_row(1, "Forecast", [1, 2])
+
+    def test_insert_row_duplicate_label_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.insert_row(1, "Revenue", [1, 2, 3])
+
+    def test_insert_row_non_string_label_raises(self, sample):
+        with pytest.raises(TypeError):
+            sample.insert_row(1, 123, [1, 2, 3])
+
+    def test_insert_column_at_start(self, sample):
+        sample.insert_column(1, "West", [10, 20])
+        assert sample.data.column_headers == ["West", "North", "South", "East"]
+        assert sample.read_row("Revenue") == [10, "100", "200", "150"]
+
+    def test_insert_column_in_middle(self, sample):
+        sample.insert_column(2, "West", [10, 20])
+        assert sample.data.column_headers == ["North", "West", "South", "East"]
+
+    def test_insert_column_at_end_matches_add_column(self, sample):
+        sample.insert_column(4, "West", [10, 20])
+        assert sample.data.column_headers == ["North", "South", "East", "West"]
+
+    def test_insert_column_out_of_range_raises(self, sample):
+        with pytest.raises(IndexError):
+            sample.insert_column(0, "West", [10, 20])
+        with pytest.raises(IndexError):
+            sample.insert_column(5, "West", [10, 20])
+
+    def test_insert_column_wrong_length_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.insert_column(1, "West", [10])
+
+    def test_insert_column_duplicate_header_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.insert_column(1, "North", [10, 20])
+
+    def test_insert_column_non_string_header_raises(self, sample):
+        with pytest.raises(TypeError):
+            sample.insert_column(1, 123, [10, 20])
 
     def test_build_table_from_empty(self):
         t = Table(data=[], column_headers=["a", "b"], name="T")
