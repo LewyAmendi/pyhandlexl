@@ -138,6 +138,8 @@ def verify_or_locate(workbook, entry: TableEntry) -> TableEntry:
 
 
 def get_entry(entries: dict[str, TableEntry], name: str) -> TableEntry:
+    if not isinstance(name, str):
+        raise TypeError(f"name must be str, got {type(name).__name__}: {name!r}")
     try:
         return entries[name]
     except KeyError:

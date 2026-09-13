@@ -232,12 +232,14 @@ case. Same constraints as `add_row`/`add_column` otherwise; an out-of-range
 position raises `IndexError`.
 
 You can also build a table up from nothing before placing it — `create()` is
-only needed once, for that first placement:
+only needed once, for that first placement. `column_headers=` and `name=` are
+the only required arguments; data and row labels can start empty and grow
+with `add_row`:
 
 ```python
 from pyhandlexl import create_workbook, Table
 
-t = Table([], column_headers=["q1", "q2"], name="Budget")
+t = Table(column_headers=["q1", "q2"], name="Budget")
 t.add_row("Alice", [10, 20])
 create_workbook("new.xlsx")
 t.create("new.xlsx", sheet="Sheet")
@@ -408,6 +410,18 @@ write_sheet("data.xlsx", g)
 take `values` require `len(values)` to equal the row count; out-of-range
 indices raise `IndexError`. Gaps introduced by any of these (padding a short
 row, `pad`, `transpose`) are filled with `None`.
+
+```python
+grid.show(g)                     # default: first 5 and last 5 rows, "..." between
+grid.show(g, rows=10)             # only the first 10 rows
+grid.show(g, head=2, tail=2)      # first 2 and last 2 rows
+grid.show(g, head=None, tail=None)  # every row, no truncation
+```
+
+Prints a plain, aligned, whitespace-padded block to the console — a debug
+convenience, with the same truncation rules as [`Table.show`](#displaying-a-table).
+Ragged rows are padded with `""` for display only; the grid itself is
+untouched.
 
 ## Files
 

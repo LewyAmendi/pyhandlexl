@@ -40,6 +40,14 @@ class TestReading:
         with pytest.raises(IndexError):
             grid.get_column(g, 4)
 
+    def test_non_int_row_raises_typeerror(self, g):
+        with pytest.raises(TypeError):
+            grid.get_row(g, "1")
+
+    def test_non_int_column_raises_typeerror(self, g):
+        with pytest.raises(TypeError):
+            grid.get_column(g, "1")
+
 
 class TestSetValue:
     def test_sets_one_cell(self, g):
@@ -137,3 +145,67 @@ class TestShape:
 
     def test_transpose_empty(self):
         assert grid.transpose([]) == []
+
+
+class TestShow:
+    def test_show_all(self, g, capsys):
+        grid.show(g)
+        out = capsys.readouterr().out
+        assert "a" in out and "i" in out
+
+    def test_show_rows_limits_output(self, capsys):
+        g = [[i] for i in range(5)]
+        grid.show(g, rows=2)
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert len(lines) == 2
+
+    def test_show_head_tail_inserts_divider(self, capsys):
+        g = [[i] for i in range(10)]
+        grid.show(g, head=2, tail=2)
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert len(lines) == 5  # 2 head + divider + 2 tail
+        assert "..." in lines[2]
+
+    def test_show_head_tail_no_divider_when_it_would_cover_everything(self, capsys):
+        g = [[1], [2]]
+        grid.show(g, head=2, tail=2)
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert not any("..." in line for line in lines)
+
+    def test_default_truncates_to_head_and_tail_5(self, capsys):
+        g = [[i] for i in range(12)]
+        grid.show(g)
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert len(lines) == 11  # 5 head + divider + 5 tail
+        assert "..." in lines[5]
+        assert lines[0].strip() == "0"
+        assert lines[-1].strip() == "11"
+
+    def test_default_shows_everything_when_10_rows_or_fewer(self, capsys):
+        g = [[i] for i in range(8)]
+        grid.show(g)
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert len(lines) == 8
+        assert not any("..." in line for line in lines)
+
+    def test_show_empty_grid(self, capsys):
+        grid.show([])
+        assert "empty" in capsys.readouterr().out
+
+    def test_show_ragged_rows_pads_for_display(self, capsys):
+        grid.show([[1, 2, 3], [1]])
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert len(lines) == 2
+        assert lines[0].split() == ["1", "2", "3"]
+
+    def test_negative_rows_raises(self, g):
+        with pytest.raises(ValueError):
+            grid.show(g, rows=-1)
+        with pytest.raises(ValueError):
+            grid.show(g, head=-1)
+        with pytest.raises(ValueError):
+            grid.show(g, tail=-1)
+
+    def test_non_int_rows_raises_typeerror(self, g):
+        with pytest.raises(TypeError):
+            grid.show(g, head="a")

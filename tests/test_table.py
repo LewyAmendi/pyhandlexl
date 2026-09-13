@@ -31,18 +31,20 @@ class TestConstruction:
             Table(data=[["1"]])
 
     def test_name_is_stored(self):
-        assert Table(data=[["1"]], name="Sales").name == "Sales"
+        t = Table(data=[["1"]], column_headers=["a"], row_labels=["x"], name="Sales")
+        assert t.name == "Sales"
 
     def test_non_string_name_raises_typeerror(self):
         with pytest.raises(TypeError):
-            Table(data=[["1"]], name=123)
+            Table(data=[["1"]], column_headers=["a"], row_labels=["x"], name=123)
 
     def test_empty_name_raises(self):
         with pytest.raises(ValueError):
-            Table(data=[["1"]], name="")
+            Table(data=[["1"]], column_headers=["a"], row_labels=["x"], name="")
 
     def test_repr_includes_name(self):
-        assert "name='Sales'" in repr(Table(data=[["1"]], name="Sales"))
+        t = Table(data=[["1"]], column_headers=["a"], row_labels=["x"], name="Sales")
+        assert "name='Sales'" in repr(t)
 
     def test_mismatched_row_labels_raise(self):
         with pytest.raises(ValueError):
@@ -52,11 +54,38 @@ class TestConstruction:
         with pytest.raises(ValueError):
             Table(data=[["1", "2"]], column_headers=["a"], row_labels=["x"], name="T")
 
-    def test_grid_only_is_allowed(self):
-        t = Table(data=[["1", "2"], ["3", "4"]], name="T")
-        assert t.data.rows == [["1", "2"], ["3", "4"]]
-        assert t.data.column_headers == []
-        assert t.data.row_labels == []
+    def test_column_headers_is_required(self):
+        with pytest.raises(TypeError):
+            Table(data=[["1"]], row_labels=["x"], name="T")
+
+    def test_empty_column_headers_raises(self):
+        with pytest.raises(ValueError):
+            Table(data=[], column_headers=[], name="T")
+
+    def test_headers_with_data_but_no_row_labels_raises(self):
+        with pytest.raises(ValueError):
+            Table(data=[["1", "2"], ["3", "4"]], column_headers=["a", "b"], name="T")
+
+    def test_headers_with_no_rows_yet_is_allowed(self):
+        # building up a table before its first add_row() — row_labels is
+        # necessarily empty too, since there's nothing to label yet
+        t = Table(data=[], column_headers=["a", "b"], name="T")
+        assert t.data.column_headers == ["a", "b"]
+        assert t.data.rows == []
+
+    def test_bare_string_column_headers_raises(self):
+        # a bare str is Iterable[str] — silently splitting "ab" into ["a", "b"]
+        # would be a dangerous, invisible footgun rather than a clear mistake
+        with pytest.raises(TypeError):
+            Table(data=[[1, 2]], column_headers="ab", row_labels=["x"], name="T")
+
+    def test_bare_string_row_labels_raises(self):
+        with pytest.raises(TypeError):
+            Table(data=[[1]], column_headers=["a"], row_labels="x", name="T")
+
+    def test_bare_string_data_raises(self):
+        with pytest.raises(TypeError):
+            Table(data="ab", name="T")
 
     def test_non_string_row_label_raises_typeerror(self):
         with pytest.raises(TypeError):
@@ -128,10 +157,10 @@ class TestToFromDict:
         assert t.data.corner == "Metric"
         assert t.data.rows == [[100, 200], [40, 60]]
 
-    def test_from_dict_empty(self):
-        t = Table.from_dict({}, name="T")
-        assert t.data.rows == []
-        assert t.data.column_headers == []
+    def test_from_dict_empty_raises(self):
+        # no rows means no way to infer column_headers, which is mandatory
+        with pytest.raises(ValueError):
+            Table.from_dict({}, name="T")
 
     def test_from_dict_mismatched_keys_raises(self):
         with pytest.raises(ValueError):
@@ -140,6 +169,14 @@ class TestToFromDict:
     def test_from_dict_different_key_order_raises(self):
         with pytest.raises(ValueError):
             Table.from_dict({"r1": {"a": 1, "b": 2}, "r2": {"b": 4, "a": 3}}, name="T")
+
+    def test_from_dict_non_mapping_raises_typeerror(self):
+        with pytest.raises(TypeError):
+            Table.from_dict([1, 2, 3], name="T")
+
+    def test_from_dict_non_mapping_row_raises_typeerror(self):
+        with pytest.raises(TypeError):
+            Table.from_dict({"r1": [1, 2]}, name="T")
 
     def test_to_dict_round_trips_through_from_dict(self, sample):
         rebuilt = Table.from_dict(sample.to_dict(), corner=sample.corner, name="T")
@@ -236,6 +273,12 @@ class TestCellByPosition:
         with pytest.raises(TypeError):
             sample.read_cell("B2", row=2)
 
+    def test_malformed_ref_raises_valueerror(self, sample):
+        with pytest.raises(ValueError):
+            sample.read_cell("not a ref")
+        with pytest.raises(ValueError):
+            sample.read_cell("")
+
 
 class TestDunders:
     def test_equality_ignores_name(self, sample):
@@ -247,7 +290,7 @@ class TestDunders:
             name="DifferentName",
         )
         assert sample == same
-        assert sample != Table(data=[["1"]], name="T")
+        assert sample != Table(data=[["1"]], column_headers=["a"], row_labels=["x"], name="T")
 
 
 class TestReadWriteRoundTrip:
@@ -270,6 +313,23 @@ class TestReadWriteRoundTrip:
         ).create(book, sheet="Sheet")
         t = Table.read(book, "Dup")
         assert t.data.column_headers == ["amount", "amount"]
+
+    def test_create_with_headers_but_no_rows_round_trips(self, book):
+        # regression: the corner cell used to be omitted from the persisted
+        # header row whenever row_labels was empty, silently shifting every
+        # header over by one on read-back
+        Table(data=[], column_headers=["a", "b", "c"], name="Empty").create(book, sheet="Sheet")
+        t = Table.read(book, "Empty")
+        assert t.data.column_headers == ["a", "b", "c"]
+        assert t.data.corner == ""
+        assert t.data.rows == []
+
+    def test_create_with_headers_then_add_row_round_trips(self, book):
+        t = Table(data=[], column_headers=["a", "b"], name="T")
+        t.create(book, sheet="Sheet")
+        t.add_row("r1", [1, 2])
+        t.write(book)
+        assert Table.read(book, "T").data.rows == [[1, 2]]
 
 
 class TestSetCell:
@@ -406,6 +466,12 @@ class TestAdd:
         with pytest.raises(TypeError):
             sample.insert_row(1, 123, [1, 2, 3])
 
+    def test_insert_row_non_int_position_raises_typeerror(self, sample):
+        with pytest.raises(TypeError):
+            sample.insert_row("1", "Forecast", [1, 2, 3])
+        with pytest.raises(TypeError):
+            sample.insert_row(1.5, "Forecast", [1, 2, 3])
+
     def test_insert_column_at_start(self, sample):
         sample.insert_column(1, "West", [10, 20])
         assert sample.data.column_headers == ["West", "North", "South", "East"]
@@ -436,6 +502,12 @@ class TestAdd:
     def test_insert_column_non_string_header_raises(self, sample):
         with pytest.raises(TypeError):
             sample.insert_column(1, 123, [10, 20])
+
+    def test_insert_column_non_int_position_raises_typeerror(self, sample):
+        with pytest.raises(TypeError):
+            sample.insert_column("1", "West", [10, 20])
+        with pytest.raises(TypeError):
+            sample.insert_column(1.5, "West", [10, 20])
 
     def test_build_table_from_empty(self):
         t = Table(data=[], column_headers=["a", "b"], name="T")

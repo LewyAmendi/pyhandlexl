@@ -107,6 +107,11 @@ class TestReadNamed:
         with pytest.raises(TableNotFoundError):
             Table.read(data_sheet, name="Ghost")
 
+    def test_non_string_name_raises_typeerror(self, data_sheet):
+        _sales().create(data_sheet, sheet="Data")
+        with pytest.raises(TypeError):
+            Table.read(data_sheet, name=123)
+
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             Table.read(tmp_path / "nope.xlsx", name="Sales")
@@ -299,9 +304,12 @@ class TestShow:
         lines = capsys.readouterr().out.strip().splitlines()
         assert not any("..." in line for line in lines)
 
-    def test_show_empty_table(self, capsys):
-        Table(data=[], name="T").show()
-        assert "empty" in capsys.readouterr().out
+    def test_show_table_with_no_rows_yet(self, capsys):
+        # column_headers is mandatory, so there's always at least a header
+        # row to show, even before the first add_row()
+        Table(data=[], column_headers=["v"], name="T").show()
+        out = capsys.readouterr().out
+        assert "v" in out
 
     def test_default_truncates_to_head_and_tail_5(self, capsys):
         t = Table(
@@ -318,6 +326,20 @@ class TestShow:
         assert "r0 " in lines[1]
         assert "r11" in lines[-1]
         assert not any("r5" in line or "r6" in line for line in lines)
+
+    def test_negative_rows_raises(self):
+        t = Table(data=[[1]], column_headers=["v"], row_labels=["a"], name="T")
+        with pytest.raises(ValueError):
+            t.show(rows=-1)
+        with pytest.raises(ValueError):
+            t.show(head=-1)
+        with pytest.raises(ValueError):
+            t.show(tail=-1)
+
+    def test_non_int_rows_raises_typeerror(self):
+        t = Table(data=[[1]], column_headers=["v"], row_labels=["a"], name="T")
+        with pytest.raises(TypeError):
+            t.show(head="a")
 
     def test_default_shows_everything_when_10_rows_or_fewer(self, capsys):
         t = Table(
