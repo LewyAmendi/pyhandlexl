@@ -133,6 +133,30 @@ d.corner            # value of cell A1       (str)
 
 Every field is a fresh copy — mutating `t.data.rows` does not change the table.
 
+```python
+t.to_dict()
+# {'Alice': {'q1': 10, 'q2': 20}, 'Bob': {'q1': 30, 'q2': 40}}
+```
+
+`to_dict` keys the outer dict by row label and the inner one by column
+header, so both axes survive in a single structure. Build a table the other
+way with `Table.from_dict`:
+
+```python
+from pyhandlexl import Table
+
+t = Table.from_dict(
+    {"Alice": {"q1": 10, "q2": 20}, "Bob": {"q1": 30, "q2": 40}},
+    name="Budget",
+)
+```
+
+The outer keys become the row labels, in order. Every inner dict must have
+the same keys, in the same order — that order becomes the column headers
+(`ValueError` otherwise). A duplicate row label or column header (only
+possible on a table read from a file) collapses to its last value on
+`to_dict`, since dict keys must be unique.
+
 ### Access by label
 
 ```python
@@ -182,6 +206,9 @@ t.set_column("q1", [1, 2])          # replace a column (length must match)
 t.add_row("Carol", [1, 2])          # append a labelled row
 t.add_column("q3", [5, 6])          # append a labelled column
 
+t.insert_row(1, "Carol", [1, 2])       # insert as the new first row
+t.insert_column(2, "q0", [5, 6])       # insert as the new 2nd column
+
 t.drop_row("Bob")
 t.drop_column("q2")
 
@@ -197,6 +224,12 @@ duplicate an existing label/header, raise `ValueError`; unknown labels raise
 `KeyError`; a non-`str` row label, column header, or corner raises `TypeError`.
 Data values may be any type; a value Excel can't store is caught on `.write()`
 (`CellTypeError`), not when it's set.
+
+`insert_row`/`insert_column` take a 1-based position among existing data rows/
+columns: `1` inserts as the new first one; `len(...) + 1` inserts as the last
+— the same result as `add_row`/`add_column`, which are exactly that special
+case. Same constraints as `add_row`/`add_column` otherwise; an out-of-range
+position raises `IndexError`.
 
 You can also build a table up from nothing before placing it — `create()` is
 only needed once, for that first placement:

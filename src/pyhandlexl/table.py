@@ -16,7 +16,7 @@ self-healing rules.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -133,6 +133,31 @@ class Table:
         finally:
             workbook.close()
 
+    @classmethod
+    def from_dict(
+        cls,
+        table: Mapping[str, Mapping[str, object]],
+        corner: str = "",
+        *,
+        name: str,
+    ) -> Table:
+        """Build a Table from a dict of dicts: row label -> {column header: value}.
+
+        The outer keys become the row labels, in order. Every inner dict must
+        have the same keys in the same order — that order becomes the column
+        headers (``ValueError`` otherwise).
+        """
+        row_labels = list(table.keys())
+        rows = [dict(row) for row in table.values()]
+        headers = list(rows[0].keys()) if rows else []
+        for label, row in zip(row_labels, rows, strict=True):
+            if list(row.keys()) != headers:
+                raise ValueError(
+                    f"row {label!r} has keys {list(row.keys())!r}, expected {headers!r}"
+                )
+        data = [list(row.values()) for row in rows]
+        return cls(data, headers, row_labels, corner, name=name)
+
     # ------------------------------------------------------------ properties
 
     @property
@@ -163,6 +188,19 @@ class Table:
             column_headers=list(self._column_headers),
             corner=self._corner,
         )
+
+    def to_dict(self) -> dict[str, dict[str, object]]:
+        """The table as a dict of dicts: row label -> {column header: value}.
+
+        Preserves both axes in one structure — the inverse of
+        :meth:`from_dict`. A duplicate row label or column header (only
+        possible on a table read from a file) collapses to its last value,
+        since dict keys must be unique.
+        """
+        return {
+            label: dict(zip(self._column_headers, row, strict=True))
+            for label, row in zip(self._row_labels, self._data, strict=True)
+        }
 
     # ---------------------------------------------------------- label access
 
@@ -327,23 +365,50 @@ class Table:
         for data_row, value in zip(self._data, new_col, strict=True):
             data_row[j] = value
 
+    def _check_new_row(self, label: str, values: list[object]) -> None:
+        if not isinstance(label, str):
+            raise TypeError(f"row label must be str, got {type(label).__name__}: {label!r}")
+        if label in self._row_labels:
+            raise ValueError(f"row label {label!r} already exists")
+        if self._data and not self._row_labels:
+            raise ValueError("this table has no row labels; use the grid layout to add rows")
+        if (self._data or self._column_headers) and len(values) != self._width():
+            raise ValueError(f"expected {self._width()} values, got {len(values)}")
+
     def add_row(self, label: str, values: Iterable[object]) -> None:
         """Append a labeled data row.
 
         ``len(values)`` must match the column count, and *label* must not
         already be in use (``ValueError``).
         """
-        if not isinstance(label, str):
-            raise TypeError(f"row label must be str, got {type(label).__name__}: {label!r}")
-        if label in self._row_labels:
-            raise ValueError(f"row label {label!r} already exists")
+        self.insert_row(len(self._data) + 1, label, values)
+
+    def insert_row(self, position: int, label: str, values: Iterable[object]) -> None:
+        """Insert a labeled data row before data-row *position* (1-based).
+
+        ``position`` ranges from 1 (new first row) through
+        ``len(data.rows) + 1`` — that top end inserts it as the last row, the
+        same result as :meth:`add_row`. Same constraints as :meth:`add_row`:
+        *label* must not already be in use, and ``values`` must match the
+        column count.
+        """
         new_row = list(values)
-        if self._data and not self._row_labels:
-            raise ValueError("this table has no row labels; use the grid layout to add rows")
-        if (self._data or self._column_headers) and len(new_row) != self._width():
-            raise ValueError(f"expected {self._width()} values, got {len(new_row)}")
-        self._data.append(new_row)
-        self._row_labels.append(label)
+        self._check_new_row(label, new_row)
+        n = len(self._data)
+        if not 1 <= position <= n + 1:
+            raise IndexError(f"position {position} is out of range for {n} rows (1..{n + 1})")
+        self._data.insert(position - 1, new_row)
+        self._row_labels.insert(position - 1, label)
+
+    def _check_new_column(self, header: str, values: list[object]) -> None:
+        if not isinstance(header, str):
+            raise TypeError(f"column header must be str, got {type(header).__name__}: {header!r}")
+        if header in self._column_headers:
+            raise ValueError(f"column header {header!r} already exists")
+        if any(self._data) and not self._column_headers:
+            raise ValueError("this table has no column headers; use the grid layout to add columns")
+        if len(values) != len(self._data):
+            raise ValueError(f"expected {len(self._data)} values, got {len(values)}")
 
     def add_column(self, header: str, values: Iterable[object]) -> None:
         """Append a labeled data column.
@@ -351,18 +416,25 @@ class Table:
         ``len(values)`` must match the row count, and *header* must not
         already be in use (``ValueError``).
         """
-        if not isinstance(header, str):
-            raise TypeError(f"column header must be str, got {type(header).__name__}: {header!r}")
-        if header in self._column_headers:
-            raise ValueError(f"column header {header!r} already exists")
+        self.insert_column(len(self._column_headers) + 1, header, values)
+
+    def insert_column(self, position: int, header: str, values: Iterable[object]) -> None:
+        """Insert a labeled data column before column-position *position* (1-based).
+
+        ``position`` ranges from 1 (new first column) through
+        ``len(data.column_headers) + 1`` — that top end inserts it as the
+        last column, the same result as :meth:`add_column`. Same constraints
+        as :meth:`add_column`: *header* must not already be in use, and
+        ``values`` must match the row count.
+        """
         new_col = list(values)
-        if any(self._data) and not self._column_headers:
-            raise ValueError("this table has no column headers; use the grid layout to add columns")
-        if len(new_col) != len(self._data):
-            raise ValueError(f"expected {len(self._data)} values, got {len(new_col)}")
+        self._check_new_column(header, new_col)
+        n = len(self._column_headers)
+        if not 1 <= position <= n + 1:
+            raise IndexError(f"position {position} is out of range for {n} columns (1..{n + 1})")
         for data_row, value in zip(self._data, new_col, strict=True):
-            data_row.append(value)
-        self._column_headers.append(header)
+            data_row.insert(position - 1, value)
+        self._column_headers.insert(position - 1, header)
 
     def drop_row(self, label: str) -> None:
         """Remove the row labeled *label*."""

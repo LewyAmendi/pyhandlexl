@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `Table.to_dict()` — the table as `dict[str, dict[str, object]]`, outer key
+  row label, inner key column header, so both axes round-trip in one
+  structure.
+- `Table.from_dict(table, corner="", *, name)` — the inverse: builds a
+  `Table` from a dict of dicts. The outer keys become the row labels; every
+  inner dict must have the same keys, in the same order (`ValueError`
+  otherwise) — that order becomes the column headers.
+- `Table.insert_row(position, label, values)` / `insert_column(position, header,
+  values)` — insert a labeled row/column at a 1-based position among the
+  existing ones, instead of only appending. `add_row`/`add_column` are now the
+  `position = len(...) + 1` special case of these. An out-of-range position
+  raises `IndexError`.
+
 ## [0.5.0] — 2026-09-12
 
 ### Changed
