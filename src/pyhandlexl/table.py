@@ -134,26 +134,28 @@ class Table:
             workbook.close()
 
     @classmethod
-    def from_dicts(
+    def from_dict(
         cls,
-        rows: Iterable[Mapping[str, object]],
-        row_labels: Iterable[str] = (),
+        table: Mapping[str, Mapping[str, object]],
         corner: str = "",
         *,
         name: str,
     ) -> Table:
-        """Build a Table from one dict per data row, keyed by column header.
+        """Build a Table from a dict of dicts: row label -> {column header: value}.
 
-        Every dict must have the same keys in the same order — that order
-        becomes the column headers (``ValueError`` otherwise). *row_labels*
-        supplies the row labels; dicts carry data only.
+        The outer keys become the row labels, in order. Every inner dict must
+        have the same keys in the same order — that order becomes the column
+        headers (``ValueError`` otherwise).
         """
-        parsed = [dict(row) for row in rows]
-        headers = list(parsed[0].keys()) if parsed else []
-        for i, row in enumerate(parsed):
+        row_labels = list(table.keys())
+        rows = [dict(row) for row in table.values()]
+        headers = list(rows[0].keys()) if rows else []
+        for label, row in zip(row_labels, rows, strict=True):
             if list(row.keys()) != headers:
-                raise ValueError(f"row {i} has keys {list(row.keys())!r}, expected {headers!r}")
-        data = [list(row.values()) for row in parsed]
+                raise ValueError(
+                    f"row {label!r} has keys {list(row.keys())!r}, expected {headers!r}"
+                )
+        data = [list(row.values()) for row in rows]
         return cls(data, headers, row_labels, corner, name=name)
 
     # ------------------------------------------------------------ properties
@@ -187,14 +189,18 @@ class Table:
             corner=self._corner,
         )
 
-    def to_dicts(self) -> list[dict[str, object]]:
-        """The data rows as a list of dicts, keyed by column header.
+    def to_dict(self) -> dict[str, dict[str, object]]:
+        """The table as a dict of dicts: row label -> {column header: value}.
 
-        Row labels are not included — use :attr:`data` if you need them
-        alongside the header-keyed values. A duplicate column header (only
-        possible on a table read from a file) collapses to its last value.
+        Preserves both axes in one structure — the inverse of
+        :meth:`from_dict`. A duplicate row label or column header (only
+        possible on a table read from a file) collapses to its last value,
+        since dict keys must be unique.
         """
-        return [dict(zip(self._column_headers, row, strict=True)) for row in self._data]
+        return {
+            label: dict(zip(self._column_headers, row, strict=True))
+            for label, row in zip(self._row_labels, self._data, strict=True)
+        }
 
     # ---------------------------------------------------------- label access
 

@@ -134,25 +134,28 @@ d.corner            # value of cell A1       (str)
 Every field is a fresh copy — mutating `t.data.rows` does not change the table.
 
 ```python
-t.to_dicts()   # [{'q1': 10, 'q2': 20}, {'q1': 30, 'q2': 40}]  — one dict per data row
+t.to_dict()
+# {'Alice': {'q1': 10, 'q2': 20}, 'Bob': {'q1': 30, 'q2': 40}}
 ```
 
-`to_dicts` keys each data row by column header; row labels aren't included —
-use `t.data` alongside it if you need those too. Build a table the other way
-with `Table.from_dicts`:
+`to_dict` keys the outer dict by row label and the inner one by column
+header, so both axes survive in a single structure. Build a table the other
+way with `Table.from_dict`:
 
 ```python
 from pyhandlexl import Table
 
-t = Table.from_dicts(
-    [{"q1": 10, "q2": 20}, {"q1": 30, "q2": 40}],
-    row_labels=["Alice", "Bob"],
+t = Table.from_dict(
+    {"Alice": {"q1": 10, "q2": 20}, "Bob": {"q1": 30, "q2": 40}},
     name="Budget",
 )
 ```
 
-Every dict must have the same keys, in the same order — that order becomes
-the column headers (`ValueError` otherwise).
+The outer keys become the row labels, in order. Every inner dict must have
+the same keys, in the same order — that order becomes the column headers
+(`ValueError` otherwise). A duplicate row label or column header (only
+possible on a table read from a file) collapses to its last value on
+`to_dict`, since dict keys must be unique.
 
 ### Access by label
 

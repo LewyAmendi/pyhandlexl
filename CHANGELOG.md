@@ -8,12 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `Table.to_dicts()` — data rows as `list[dict[str, object]]`, keyed by column
-  header; row labels aren't included.
-- `Table.from_dicts(rows, row_labels=(), corner="", *, name)` — the inverse:
-  builds a `Table` from one dict per data row. Every dict must have the same
-  keys, in the same order (`ValueError` otherwise) — that order becomes the
-  column headers.
+- `Table.to_dict()` — the table as `dict[str, dict[str, object]]`, outer key
+  row label, inner key column header, so both axes round-trip in one
+  structure.
+- `Table.from_dict(table, corner="", *, name)` — the inverse: builds a
+  `Table` from a dict of dicts. The outer keys become the row labels; every
+  inner dict must have the same keys, in the same order (`ValueError`
+  otherwise) — that order becomes the column headers.
 - `Table.insert_row(position, label, values)` / `insert_column(position, header,
   values)` — insert a labeled row/column at a 1-based position among the
   existing ones, instead of only appending. `add_row`/`add_column` are now the
