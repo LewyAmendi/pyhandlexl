@@ -37,7 +37,7 @@ t.write("budget.xlsx")                   # safe, atomic write
 
 > **Under active development.** Usable today — expect new capabilities with each
 > release, and some API changes before it stabilises. See the
-> [changelog](CHANGELOG.md).
+> [changelog](https://github.com/LewyAmendi/pyhandlexl/blob/main/CHANGELOG.md).
 
 ## Install
 
