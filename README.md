@@ -143,6 +143,10 @@ header, so both axes survive in a single structure. Build a table the other
 way with `Table.from_dict`:
 
 ```python
+Table.from_dict(table, corner="", *, name)
+```
+
+```python
 from pyhandlexl import Table
 
 t = Table.from_dict(
@@ -153,9 +157,11 @@ t = Table.from_dict(
 
 The outer keys become the row labels, in order. Every inner dict must have
 the same keys, in the same order — that order becomes the column headers
-(`ValueError` otherwise). A duplicate row label or column header (only
-possible on a table read from a file) collapses to its last value on
-`to_dict`, since dict keys must be unique.
+(`ValueError` otherwise); `table` itself, and every row in it, must be a
+mapping (`TypeError` otherwise). `table` must not be empty — with no rows
+there's nothing to infer the column headers from. A duplicate row label or
+column header (only possible on a table read from a file) collapses to its
+last value on `to_dict`, since dict keys must be unique.
 
 ### Access by label
 
@@ -192,7 +198,8 @@ actually lives.
 
 A string given through `row=`/`column=` is always a label lookup — it does
 **not** accept a column letter like `"B"` for a position. Use a plain number
-(`column=2`) or `ref="B2"` for letter-based positions.
+(`column=2`) or `ref="B2"` for letter-based positions. A malformed `ref`
+(`""`, `"not a ref"`) raises `ValueError`.
 
 ### Editing (in place, returns `None`)
 
@@ -223,13 +230,15 @@ corner by position raises `ValueError`; use `rename_row`, `rename_column`, or
 duplicate an existing label/header, raise `ValueError`; unknown labels raise
 `KeyError`; a non-`str` row label, column header, or corner raises `TypeError`.
 Data values may be any type; a value Excel can't store is caught on `.write()`
-(`CellTypeError`), not when it's set.
+(`CellTypeError`), not when it's set. `drop_column` refuses to remove a
+table's only remaining column (`ValueError`) — `column_headers` is required
+and can never end up empty.
 
 `insert_row`/`insert_column` take a 1-based position among existing data rows/
 columns: `1` inserts as the new first one; `len(...) + 1` inserts as the last
 — the same result as `add_row`/`add_column`, which are exactly that special
-case. Same constraints as `add_row`/`add_column` otherwise; an out-of-range
-position raises `IndexError`.
+case. Same constraints as `add_row`/`add_column` otherwise; a non-`int`
+position raises `TypeError`, an out-of-range one raises `IndexError`.
 
 You can also build a table up from nothing before placing it — `create()` is
 only needed once, for that first placement. `column_headers=` and `name=` are
@@ -340,7 +349,10 @@ The default (`head=5, tail=5`) shows everything with no divider if the table
 has 10 rows or fewer — truncation only kicks in past that. `rows=` overrides
 the head/tail defaults outright. Prints a plain, aligned, whitespace-padded
 grid to the console — a debug convenience, unrelated to cell formatting in the
-`.xlsx` (still out of scope; see [Not in scope](#not-in-scope)).
+`.xlsx` (still out of scope; see [Not in scope](#not-in-scope)). `rows`,
+`head`, and `tail` must each be a non-negative `int` or `None` — a negative
+value raises `ValueError` and a non-`int` raises `TypeError`, rather than
+silently doing something confusing with Python's slice semantics.
 
 ## Unorganised data: the grid layout
 
@@ -419,9 +431,9 @@ grid.show(g, head=None, tail=None)  # every row, no truncation
 ```
 
 Prints a plain, aligned, whitespace-padded block to the console — a debug
-convenience, with the same truncation rules as [`Table.show`](#displaying-a-table).
-Ragged rows are padded with `""` for display only; the grid itself is
-untouched.
+convenience, with the same truncation rules (and the same `rows`/`head`/`tail`
+validation) as [`Table.show`](#displaying-a-table). Ragged rows are padded
+with `""` for display only; the grid itself is untouched.
 
 ## Files
 
@@ -439,7 +451,8 @@ removes a workbook file, retrying while it is locked (open in Excel) before
 raising `FileLockedError`, and refuses a path that isn't an Excel extension.
 
 Every write operation — `write_sheet`, `append_rows`, `create_sheet`,
-`Table.write` — raises `FileNotFoundError` if the file does not exist yet.
+`Table.create`, `Table.write` — raises `FileNotFoundError` if the file does
+not exist yet.
 
 ## Sheet management
 
