@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-09-13
+
+### Fixed
+- Documentation only — no code changes. The README was missing several
+  parameters and error behaviors added in 0.7.0: `from_dict`'s `corner=`
+  argument, `drop_column`'s last-column guard, `insert_row`/`insert_column`'s
+  non-`int` position `TypeError`, `read_cell`/`set_cell`'s malformed-ref
+  `ValueError`, `show()`'s `rows`/`head`/`tail` validation, and `Table.create`
+  in the list of operations that raise `FileNotFoundError`.
+
 ## [0.7.0] — 2026-09-13
 
 ### Added
@@ -223,7 +233,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.4.0...v0.5.0
