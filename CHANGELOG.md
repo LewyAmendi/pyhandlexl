@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-14
+
 ### Added
 - **`read_sheet`/`write_sheet`/`append_rows` now work directly on a `.csv`
   file**, not just `.xlsx` — pass a path ending in `.csv` and they read/write
@@ -266,7 +268,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.5.0...v0.6.0
