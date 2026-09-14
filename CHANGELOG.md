@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`read_sheet`/`write_sheet`/`append_rows` now work directly on a `.csv`
+  file**, not just `.xlsx` — pass a path ending in `.csv` and they read/write
+  the file itself, treated purely as a raw grid, never a table:
+  - Every value is a plain `str` on read, and `str()`-converted on write
+    (`None` becomes `""`) — a CSV field has no other type, so nothing is
+    inferred as a number, date, or boolean. May change in a future release.
+  - `sheet` must be `None` for a `.csv` path (`ValueError` otherwise) — it
+    has no sheets.
+  - No size limit — `DimensionError`/`CellTypeError` never apply to a `.csv`
+    write.
+  - The file must already exist, exactly like `.xlsx` — `create_csv(path)`
+    is the `.csv` equivalent of `create_workbook`. `write_sheet` replaces
+    the whole file and writes atomically; `append_rows` opens the file in
+    append mode and writes only the new rows — it never reads the existing
+    content, so appending stays cheap no matter how large the file already
+    is, at the cost of the temp-file-then-replace safety `write_sheet` gets
+    (a crash mid-write can leave a malformed trailing row, but can never
+    lose or corrupt existing content).
+  - `pyhandlexl.grid`'s editing functions needed no changes — they only
+    ever operate on the `list[list]` these return, never touch a file.
+- `import_csv_to_xl(csv_path, path, *, sheet=None, encoding="utf-8-sig")`
+  and `export_xl_to_csv(path, csv_path, *, sheet=None, encoding="utf-8")` —
+  one-shot conversions *between* a CSV file and an `.xlsx` worksheet (not a
+  live link), renamed from `import_csv`/`export_csv` for clarity now that
+  `read_sheet`/`write_sheet` also handle `.csv` natively. Behavior
+  otherwise unchanged: `import_csv_to_xl` requires the `.xlsx` file to
+  exist and raises `DimensionError` if the CSV is too big for an `.xlsx`
+  grid, checked before anything is written; `export_xl_to_csv` refuses to
+  overwrite an existing file at `csv_path` and writes atomically. Both now
+  also validate that `csv_path`/`path` actually have the extension their
+  name promises (`ValueError` otherwise).
+
 ## [0.7.1] — 2026-09-13
 
 ### Fixed
