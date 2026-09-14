@@ -35,6 +35,12 @@ t.write("budget.xlsx")                   # safe, atomic write
   `read_sheet`/`write_sheet` give you a `list[list]`; `pyhandlexl.grid` edits
   it by position.
 
+Have a `.csv` file instead of `.xlsx`? `read_sheet`/`write_sheet`/
+`append_rows`/`grid` work directly on one too, as a raw grid — see
+[CSV rules](#csv-rules-for-read_sheet-write_sheet-and-append_rows). To move
+data *between* CSV and `.xlsx` instead, see
+[Moving data between CSV and .xlsx](#moving-data-between-csv-and-xlsx).
+
 > **Under active development.** Usable today — expect new capabilities with each
 > release, and some API changes before it stabilises. See the
 > [changelog](https://github.com/LewyAmendi/pyhandlexl/blob/main/CHANGELOG.md).
@@ -363,33 +369,91 @@ index, and write back. If your sheet *does* have column headers and row
 labels, use [`Table`](#organised-data-the-table-class) instead — it'll save
 you from re-inventing header/label handling by hand.
 
+**These same functions work directly on a `.csv` file too** — pass a path
+ending in `.csv` instead of `.xlsx` and they read/write the file itself
+rather than a worksheet inside a workbook. A `.csv` file is treated purely as
+a raw grid, never as a table: no types, no sheets, no size limit — see
+[CSV rules](#csv-rules-for-read_sheet-write_sheet-and-append_rows) below.
+`pyhandlexl.grid`'s editing functions need no changes to work either way,
+since they only ever touch the `list[list]` these return, never a file.
+
 ```python
 from pyhandlexl import read_sheet, write_sheet, append_rows
 
 read_sheet(path, sheet=None, *, pad=False)
 ```
 
-Returns `list[list[object]]` — each cell as its native type (`str`, `int`,
-`float`, `bool`, `datetime`, `date`, `time`, `timedelta`), an empty cell as
-`None`. Trailing `None` values are trimmed from each row (a fully empty row
-becomes `[]`); `pad=True` right-pads every row with `None` to the widest row's
-length instead.
+For an **.xlsx** file: returns `list[list[object]]` — each cell as its
+native type (`str`, `int`, `float`, `bool`, `datetime`, `date`, `time`,
+`timedelta`), an empty cell as `None`. Trailing `None` values are trimmed
+from each row (a fully empty row becomes `[]`); `pad=True` right-pads every
+row with `None` to the widest row's length instead.
 
 ```python
 write_sheet(path, rows, sheet=None, *, orientation="rows")
 ```
 
-Replaces the target sheet with `rows` (other sheets untouched); adds `sheet` if
-it does not exist. Values are written with their type preserved — no conversion;
-`None` leaves the cell empty. A value that isn't a type Excel can store raises
-`CellTypeError`. `orientation="columns"` writes each inner list *down a column*
-instead of across a row.
+For an **.xlsx** file: replaces the target sheet with `rows` (other sheets
+untouched); adds `sheet` if it does not exist. Values are written with their
+type preserved — no conversion; `None` leaves the cell empty. A value that
+isn't a type Excel can store raises `CellTypeError`. `orientation="columns"`
+writes each inner list *down a column* instead of across a row.
 
 ```python
 append_rows(path, rows, sheet=None)
 ```
 
-Appends after the last row. Empty input is a no-op.
+For an **.xlsx** file: appends after the last row. Empty input is a no-op.
+
+### CSV rules for read_sheet, write_sheet, and append_rows
+
+```python
+from pyhandlexl import create_csv, read_sheet, write_sheet, append_rows, grid
+
+create_csv("data.csv")                    # files are never created implicitly
+write_sheet("data.csv", [["a", "b"], [1, 2]])
+g = read_sheet("data.csv")                # [['a', 'b'], ['1', '2']]
+
+g = grid.insert_row(g, 1, ["h1", "h2"])   # the grid toolkit works unchanged
+write_sheet("data.csv", g)
+
+append_rows("data.csv", [["x", "y"]])
+```
+
+- **Every value becomes/comes back as a plain `str`** (`None` becomes `""`
+  on write) — a CSV field has no other type, so nothing is inferred as a
+  number, date, or boolean. May change in a future release; for now it's
+  deliberately literal. `read_sheet`'s trimming/`pad` behavior still
+  applies, but pads with `""` instead of `None`.
+- **`sheet` must be `None`** — a `.csv` file has no sheets. Passing anything
+  else raises `ValueError`.
+- **No size limit** — `DimensionError`/`CellTypeError` never apply to a
+  `.csv` write; it isn't bound by the `.xlsx` grid.
+- **The file must already exist**, exactly like `.xlsx` — call `create_csv`
+  first. `write_sheet` replaces the whole file's content (there's no sheet
+  to isolate a change to) and writes atomically, the same as every other
+  write in this library.
+
+**Why `append_rows` is a separate function, not just
+`write_sheet(path, grid.append_row(read_sheet(path), values))`:**
+performance. That composition would read *every* existing row into Python
+first, just to add a few more at the end — expensive once a sheet or file
+is large. `append_rows` never does: it costs only what the *new* rows cost,
+regardless of how much is already there. The two formats earn that
+differently, because they can differently:
+
+- For **.xlsx**, it loads the workbook (unavoidable — that's how you open
+  one at all) but calls the equivalent of "append one row" only for the new
+  rows; the existing ones are never walked or turned into Python values.
+  Still written atomically, like every other `.xlsx` write.
+- For **.csv**, it does better still: unlike a zip-based `.xlsx`, a plain
+  text file can be modified without rewriting it, so `append_rows` opens it
+  in append mode and writes only the new rows, touching none of the
+  existing bytes. That's cheaper than the `.xlsx` case, but it does mean a
+  `.csv` append isn't wrapped in the temp-file-then-replace safety
+  `write_sheet` gets: a crash mid-write could leave a malformed trailing
+  row, but — unlike a failed *replace* — can never lose or corrupt a byte
+  that was already there.
 
 ### Editing a grid: `pyhandlexl.grid`
 
@@ -435,6 +499,56 @@ convenience, with the same truncation rules (and the same `rows`/`head`/`tail`
 validation) as [`Table.show`](#displaying-a-table). Ragged rows are padded
 with `""` for display only; the grid itself is untouched.
 
+## Moving data between CSV and .xlsx
+
+There are two different things "CSV" might mean here, and two different
+tools for them:
+
+- **Editing a `.csv` file as itself** — `read_sheet`/`write_sheet`/
+  `append_rows`/`grid` all work directly on a `.csv` path now, treating it
+  as a raw grid (never a table). See
+  [CSV rules](#csv-rules-for-read_sheet-write_sheet-and-append_rows) above.
+  Nothing ever crosses into `.xlsx` here.
+- **Moving data *between* a `.csv` file and an `.xlsx` worksheet** —
+  `import_csv_to_xl`/`export_xl_to_csv`, below. These are one-shot
+  **conversions**, not a live link and not editing in place.
+
+```python
+from pyhandlexl import import_csv_to_xl, export_xl_to_csv
+
+import_csv_to_xl(csv_path, path, *, sheet=None, encoding="utf-8-sig")
+export_xl_to_csv(path, csv_path, *, sheet=None, encoding="utf-8")
+```
+
+```python
+import_csv_to_xl("results.csv", "experiments.xlsx", sheet="Log")
+export_xl_to_csv("experiments.xlsx", "backup.csv", sheet="Log")
+```
+
+**`import_csv_to_xl`** reads `csv_path` and writes it into `sheet` of the
+existing `.xlsx` file at `path` — same target semantics as `write_sheet`
+(replaced if `sheet` already exists, created if it doesn't). Every field
+becomes a `str` cell: CSV has no other type, so nothing is inferred as a
+number, date, or boolean. `encoding` defaults to `"utf-8-sig"`, which also
+strips a leading byte-order mark transparently (common in CSVs saved by
+Excel on Windows).
+
+**`export_xl_to_csv`** reads `sheet` from `path` and writes a brand-new CSV
+file at `csv_path` — refuses to overwrite an existing file there
+(`FileExistsError`), the same caution as `create_workbook`. Every value is
+stringified with `str()` (`None` becomes an empty field): a lossy, one-way
+conversion — re-importing the result gives back text, not the original
+types. Written atomically, like every other write in this library (see
+[Safe writes](#safe-writes)).
+
+Both require the `.xlsx` file to already exist (`FileNotFoundError`
+otherwise — see [Files](#files)), and both check the path they were given —
+`import_csv_to_xl`'s `path` must be a workbook and `csv_path` must be
+`.csv`, `export_xl_to_csv` the other way around (`ValueError` otherwise).
+`import_csv_to_xl` also raises `DimensionError` if the CSV has more rows or
+columns than an `.xlsx` worksheet can hold, checked *before* anything is
+written.
+
 ## Files
 
 Applies whether you're working with organised or unorganised data.
@@ -444,15 +558,19 @@ typo in a path can't silently produce a stray workbook.
 ```python
 create_workbook(path, *, sheet="Sheet")   # FileExistsError if the path is taken
 delete_workbook(path)                      # FileNotFoundError if it isn't there
+create_csv(path)                           # the .csv equivalent of create_workbook
 ```
 
 `create_workbook` makes a new empty `.xlsx` with one worksheet. `delete_workbook`
 removes a workbook file, retrying while it is locked (open in Excel) before
 raising `FileLockedError`, and refuses a path that isn't an Excel extension.
+`create_csv` makes a new empty `.csv` file — same guarantee, same
+`FileExistsError` if something's already there, so a typo can't silently
+overwrite or produce a stray file either way.
 
 Every write operation — `write_sheet`, `append_rows`, `create_sheet`,
 `Table.create`, `Table.write` — raises `FileNotFoundError` if the file does
-not exist yet.
+not exist yet. This applies to a `.csv` target exactly the same as `.xlsx`.
 
 ## Sheet management
 

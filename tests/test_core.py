@@ -5,12 +5,16 @@ from __future__ import annotations
 import pytest
 from openpyxl import load_workbook
 
+from pyhandlexl import grid
 from pyhandlexl.core import (
     append_rows,
+    create_csv,
     create_sheet,
     create_workbook,
     delete_sheet,
     delete_workbook,
+    export_xl_to_csv,
+    import_csv_to_xl,
     list_sheets,
     read_sheet,
     rename_sheet,
@@ -251,3 +255,389 @@ class TestSheetManagement:
     def test_rename_invalid_name_raises(self, book):
         with pytest.raises(SheetNameError):
             rename_sheet(book, "Sheet", "x" * 32)
+
+
+class TestImportCsvToXl:
+    def test_basic_import(self, book, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+        import_csv_to_xl(csv_path, book, sheet="Data")
+        assert read_sheet(book, "Data") == [["a", "b"], ["1", "2"], ["3", "4"]]
+
+    def test_values_are_always_str(self, book, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("1,2.5,true\n", encoding="utf-8")
+        import_csv_to_xl(csv_path, book, sheet="Data")
+        assert read_sheet(book, "Data") == [["1", "2.5", "true"]]
+
+    def test_creates_sheet_if_missing(self, book, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("a\n1\n", encoding="utf-8")
+        import_csv_to_xl(csv_path, book, sheet="New")
+        assert "New" in list_sheets(book)
+
+    def test_replaces_existing_sheet_without_disturbing_others(self, book, tmp_path):
+        write_sheet(book, [["old"]], sheet="Data")
+        create_sheet(book, "Other")
+        write_sheet(book, [["untouched"]], sheet="Other")
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("new\n", encoding="utf-8")
+        import_csv_to_xl(csv_path, book, sheet="Data")
+        assert read_sheet(book, "Data") == [["new"]]
+        assert read_sheet(book, "Other") == [["untouched"]]
+
+    def test_default_sheet_is_active(self, book, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("a\n1\n", encoding="utf-8")
+        import_csv_to_xl(csv_path, book)
+        assert read_sheet(book) == [["a"], ["1"]]
+
+    def test_missing_csv_raises(self, book, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            import_csv_to_xl(tmp_path / "nope.csv", book)
+
+    def test_missing_workbook_raises(self, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("a\n1\n", encoding="utf-8")
+        with pytest.raises(FileNotFoundError):
+            import_csv_to_xl(csv_path, tmp_path / "nope.xlsx")
+
+    def test_invalid_sheet_name_raises(self, book, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("a\n1\n", encoding="utf-8")
+        with pytest.raises(SheetNameError):
+            import_csv_to_xl(csv_path, book, sheet="a/b")
+
+    def test_dimension_guard(self, book, tmp_path):
+        csv_path = tmp_path / "huge.csv"
+        csv_path.write_text(",".join(["x"] * 16_385) + "\n", encoding="utf-8")
+        with pytest.raises(DimensionError):
+            import_csv_to_xl(csv_path, book, sheet="Huge")
+        assert "Huge" not in list_sheets(book)
+
+    def test_quoted_fields_with_embedded_commas_and_newlines(self, book, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        # newline="" when writing our own fixture, same as the csv module
+        # itself requires — otherwise Windows' text-mode newline translation
+        # mangles the \n embedded inside the quoted field.
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            f.write('a,b\n"hello, world","line1\nline2"\n')
+        import_csv_to_xl(csv_path, book, sheet="Data")
+        assert read_sheet(book, "Data") == [["a", "b"], ["hello, world", "line1\nline2"]]
+
+    def test_ragged_rows_preserved(self, book, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("a,b,c\n1\n1,2\n", encoding="utf-8")
+        import_csv_to_xl(csv_path, book, sheet="Data")
+        assert read_sheet(book, "Data") == [["a", "b", "c"], ["1"], ["1", "2"]]
+
+    def test_utf8_bom_is_stripped_by_default(self, book, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_bytes(b"\xef\xbb\xbfname,value\nAlice,10\n")
+        import_csv_to_xl(csv_path, book, sheet="Data")
+        assert read_sheet(book, "Data") == [["name", "value"], ["Alice", "10"]]
+
+    def test_custom_encoding(self, book, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_bytes("café\n".encode("latin-1"))
+        import_csv_to_xl(csv_path, book, sheet="Data", encoding="latin-1")
+        assert read_sheet(book, "Data") == [["café"]]
+
+    def test_non_csv_source_raises(self, book, tmp_path):
+        not_csv = tmp_path / "data.txt"
+        not_csv.write_text("a\n1\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            import_csv_to_xl(not_csv, book)
+
+    def test_non_workbook_target_raises(self, tmp_path):
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("a\n1\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            import_csv_to_xl(csv_path, tmp_path / "data2.csv")
+
+
+class TestExportXlToCsv:
+    def test_basic_export(self, book, tmp_path):
+        write_sheet(book, [["a", "b"], [1, 2.5]], sheet="Data")
+        csv_path = tmp_path / "out.csv"
+        export_xl_to_csv(book, csv_path, sheet="Data")
+        # raw bytes, not read_text() — confirms the real CRLF line terminator
+        # csv.writer uses, rather than whatever text-mode read normalizes to
+        assert csv_path.read_bytes() == b"a,b\r\n1,2.5\r\n"
+
+    def test_none_becomes_empty_field(self, book, tmp_path):
+        write_sheet(book, [["a", None, "c"]], sheet="Data")
+        csv_path = tmp_path / "out.csv"
+        export_xl_to_csv(book, csv_path, sheet="Data")
+        assert csv_path.read_bytes() == b"a,,c\r\n"
+
+    def test_default_sheet_is_active(self, book, tmp_path):
+        write_sheet(book, [["a"]])
+        csv_path = tmp_path / "out.csv"
+        export_xl_to_csv(book, csv_path)
+        assert csv_path.read_bytes() == b"a\r\n"
+
+    def test_missing_workbook_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            export_xl_to_csv(tmp_path / "nope.xlsx", tmp_path / "out.csv")
+
+    def test_missing_sheet_raises(self, book, tmp_path):
+        with pytest.raises(SheetNotFoundError):
+            export_xl_to_csv(book, tmp_path / "out.csv", sheet="Ghost")
+
+    def test_refuses_to_overwrite_existing_file(self, book, tmp_path):
+        write_sheet(book, [["a"]])
+        csv_path = tmp_path / "out.csv"
+        csv_path.write_text("existing", encoding="utf-8")
+        with pytest.raises(FileExistsError):
+            export_xl_to_csv(book, csv_path)
+        assert csv_path.read_text(encoding="utf-8") == "existing"
+
+    def test_no_temp_file_left_on_success(self, book, tmp_path):
+        write_sheet(book, [["a"]])
+        csv_path = tmp_path / "out.csv"
+        export_xl_to_csv(book, csv_path)
+        assert {f.name for f in tmp_path.iterdir()} == {"book.xlsx", "out.csv"}
+
+    def test_no_partial_file_left_on_failure(self, book, tmp_path, monkeypatch):
+        write_sheet(book, [["a"]])
+        csv_path = tmp_path / "out.csv"
+
+        import csv as csv_module
+
+        def broken_writer(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(csv_module, "writer", broken_writer)
+        with pytest.raises(RuntimeError):
+            export_xl_to_csv(book, csv_path)
+        assert {f.name for f in tmp_path.iterdir()} == {"book.xlsx"}
+
+    def test_round_trip_through_import(self, book, tmp_path):
+        write_sheet(book, [["a", "b"], ["1", "2"]], sheet="Data")
+        csv_path = tmp_path / "out.csv"
+        export_xl_to_csv(book, csv_path, sheet="Data")
+        import_csv_to_xl(csv_path, book, sheet="Data2")
+        assert read_sheet(book, "Data2") == [["a", "b"], ["1", "2"]]
+
+    def test_non_workbook_source_raises(self, tmp_path):
+        not_xlsx = tmp_path / "data.csv"
+        not_xlsx.write_text("a\n1\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            export_xl_to_csv(not_xlsx, tmp_path / "out.csv")
+
+    def test_non_csv_target_raises(self, book, tmp_path):
+        write_sheet(book, [["a"]])
+        with pytest.raises(ValueError):
+            export_xl_to_csv(book, tmp_path / "out.txt")
+
+
+class TestCreateCsv:
+    def test_creates_empty_file(self, tmp_path):
+        path = tmp_path / "new.csv"
+        create_csv(path)
+        assert path.exists()
+        assert path.read_bytes() == b""
+
+    def test_already_exists_raises(self, tmp_path):
+        path = tmp_path / "new.csv"
+        create_csv(path)
+        with pytest.raises(FileExistsError):
+            create_csv(path)
+
+    def test_wrong_extension_raises(self, tmp_path):
+        with pytest.raises(ValueError):
+            create_csv(tmp_path / "new.txt")
+
+
+class TestReadSheetCsv:
+    def test_basic_read(self, tmp_path):
+        path = tmp_path / "data.csv"
+        path.write_text("a,b\n1,2\n", encoding="utf-8")
+        assert read_sheet(path) == [["a", "b"], ["1", "2"]]
+
+    def test_no_trimming_of_trailing_empty_fields(self, tmp_path):
+        path = tmp_path / "data.csv"
+        path.write_text("a,b,,\n", encoding="utf-8")
+        assert read_sheet(path) == [["a", "b", "", ""]]
+
+    def test_ragged_rows_preserved(self, tmp_path):
+        path = tmp_path / "data.csv"
+        path.write_text("a,b,c\n1\n1,2\n", encoding="utf-8")
+        assert read_sheet(path) == [["a", "b", "c"], ["1"], ["1", "2"]]
+
+    def test_pad_fills_with_empty_string(self, tmp_path):
+        path = tmp_path / "data.csv"
+        path.write_text("a,b,c\n1\n", encoding="utf-8")
+        assert read_sheet(path, pad=True) == [["a", "b", "c"], ["1", "", ""]]
+
+    def test_sheet_given_raises(self, tmp_path):
+        path = tmp_path / "data.csv"
+        path.write_text("a\n1\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            read_sheet(path, sheet="Sheet1")
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            read_sheet(tmp_path / "nope.csv")
+
+
+class TestWriteSheetCsv:
+    def test_replaces_whole_file(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [["old"]])
+        write_sheet(path, [["new", "content"]])
+        assert read_sheet(path) == [["new", "content"]]
+
+    def test_values_are_stringified(self, tmp_path):
+        import datetime as dt
+
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [[1, 2.5, True, None, dt.date(2026, 1, 1)]])
+        assert read_sheet(path) == [["1", "2.5", "True", "", "2026-01-01"]]
+
+    def test_orientation_columns(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [[1, 2], [3, 4]], orientation="columns")
+        assert read_sheet(path) == [["1", "3"], ["2", "4"]]
+
+    def test_requires_file_to_exist(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            write_sheet(tmp_path / "nope.csv", [["a"]])
+
+    def test_sheet_given_raises(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        with pytest.raises(ValueError):
+            write_sheet(path, [["a"]], sheet="Sheet1")
+
+    def test_no_dimension_limit(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [["x"] * 20_000])
+        assert len(read_sheet(path)[0]) == 20_000
+
+    def test_no_temp_file_left_on_success(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [["a"]])
+        assert {f.name for f in tmp_path.iterdir()} == {"data.csv"}
+
+    def test_no_partial_file_left_on_failure(self, tmp_path, monkeypatch):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [["original"]])
+
+        import csv as csv_module
+
+        def broken_writer(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(csv_module, "writer", broken_writer)
+        with pytest.raises(RuntimeError):
+            write_sheet(path, [["new"]])
+        assert read_sheet(path) == [["original"]]
+        assert {f.name for f in tmp_path.iterdir()} == {"data.csv"}
+
+
+class TestAppendRowsCsv:
+    def test_appends_to_existing_content(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [["a"]])
+        append_rows(path, [["b"], ["c"]])
+        assert read_sheet(path) == [["a"], ["b"], ["c"]]
+
+    def test_empty_rows_is_a_noop(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [["a"]])
+        append_rows(path, [])
+        assert read_sheet(path) == [["a"]]
+
+    def test_appends_to_an_empty_file(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        append_rows(path, [["a"], ["b"]])
+        assert read_sheet(path) == [["a"], ["b"]]
+
+    def test_requires_file_to_exist(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            append_rows(tmp_path / "nope.csv", [["a"]])
+
+    def test_sheet_given_raises(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        with pytest.raises(ValueError):
+            append_rows(path, [["a"]], sheet="Sheet1")
+
+    def test_values_are_stringified(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        append_rows(path, [[1, None, True]])
+        assert read_sheet(path) == [["1", "", "True"]]
+
+    def test_no_dimension_limit(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [["a"]])
+        append_rows(path, [["x"] * 20_000])
+        assert len(read_sheet(path)[1]) == 20_000
+
+    def test_does_not_read_existing_content(self, tmp_path, monkeypatch):
+        # the whole point of append_rows existing separately from
+        # write_sheet(path, grid.append_row(read_sheet(path), values)) is
+        # that it never materialises the existing rows — this proves it
+        # architecturally, not just by checking the final content
+        from pyhandlexl import core as core_module
+
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [["a"], ["b"]])
+
+        def boom(_path):
+            raise AssertionError("append_rows must not read existing CSV content")
+
+        monkeypatch.setattr(core_module, "_read_csv_rows", boom)
+        append_rows(path, [["c"]])
+        monkeypatch.undo()  # read_sheet also uses _read_csv_rows — only verify after
+        assert read_sheet(path) == [["a"], ["b"], ["c"]]
+
+    def test_appends_correctly_when_file_lacks_trailing_newline(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        with path.open("w", newline="", encoding="utf-8") as f:
+            f.write("a,b")  # deliberately no trailing newline
+        append_rows(path, [["c", "d"]])
+        assert read_sheet(path) == [["a", "b"], ["c", "d"]]
+        assert path.read_bytes() == b"a,b\r\nc,d\r\n"
+
+
+class TestGridEditingOnCsv:
+    def test_grid_functions_compose_with_csv_read_write(self, tmp_path):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [[1, 2], [3, 4]])
+
+        g = read_sheet(path)
+        g = grid.insert_row(g, 1, ["h1", "h2"])
+        g = grid.set_value(g, 2, 1, "CHANGED")
+        g = grid.append_column(g, ["h3", "x", "y"])
+        write_sheet(path, g)
+
+        assert read_sheet(path) == [
+            ["h1", "h2", "h3"],
+            ["CHANGED", "2", "x"],
+            ["3", "4", "y"],
+        ]
+
+    def test_show_works_on_csv_sourced_grid(self, tmp_path, capsys):
+        path = tmp_path / "data.csv"
+        create_csv(path)
+        write_sheet(path, [["a", "b"], ["1", "2"]])
+        grid.show(read_sheet(path))
+        out = capsys.readouterr().out
+        assert "a" in out and "1" in out
