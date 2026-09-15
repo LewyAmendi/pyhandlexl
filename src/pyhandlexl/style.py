@@ -33,9 +33,9 @@ class TableStyle:
 
     header_font_name: str = "Calibri"
     header_font_size: int = 11
-    header_font_color: str = "FFFFFF"
+    header_font_color: str = "000000"
     header_bold: bool = True
-    header_fill: str = "4472C4"
+    header_fill: str = "76933C"
     data_font_name: str = "Calibri"
     data_font_size: int = 11
     data_font_color: str = "000000"
@@ -64,11 +64,5 @@ class TableStyle:
 
 
 TableStyle.DEFAULT = TableStyle()
-TableStyle.MINIMAL = TableStyle(header_fill="", header_font_color="000000", band_fill="")
-TableStyle.NONE = TableStyle(
-    header_fill="",
-    header_font_color="000000",
-    header_bold=False,
-    band_fill="",
-    border_color="",
-)
+TableStyle.MINIMAL = TableStyle(header_fill="", band_fill="")
+TableStyle.NONE = TableStyle(header_fill="", header_bold=False, band_fill="", border_color="")

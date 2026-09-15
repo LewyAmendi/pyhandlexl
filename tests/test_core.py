@@ -171,6 +171,25 @@ class TestOrientation:
         with pytest.raises(ValueError):
             write_sheet(book, [["a"]], orientation="sideways")
 
+    def test_read_columns_orientation_transposes(self, book):
+        write_sheet(book, [["h1", "h2"], ["v1", "v2"]])
+        assert read_sheet(book, orientation="columns") == [["h1", "v1"], ["h2", "v2"]]
+
+    def test_read_columns_orientation_trims_trailing_none_per_column(self, book):
+        write_sheet(book, [["a", "b"], ["c"]])
+        assert read_sheet(book, orientation="columns") == [["a", "c"], ["b"]]
+
+    def test_read_columns_orientation_with_pad(self, book):
+        write_sheet(book, [["a", "b"], ["c"]])
+        assert read_sheet(book, orientation="columns", pad=True) == [
+            ["a", "c"],
+            ["b", None],
+        ]
+
+    def test_read_invalid_orientation_raises(self, book):
+        with pytest.raises(ValueError):
+            read_sheet(book, orientation="sideways")
+
 
 class TestAppendRows:
     def test_appends_after_existing_rows(self, book):

@@ -376,7 +376,7 @@ class TestShow:
         assert len(lines) == 4  # header + 3 rows, head/tail defaults ignored
 
 
-class TestSchemaSheetIsVisible:
-    def test_reserved_sheet_shows_up_in_list_sheets(self, data_sheet):
+class TestSchemaSheetIsHidden:
+    def test_reserved_sheet_is_excluded_from_list_sheets(self, data_sheet):
         _sales().create(data_sheet, sheet="Data")
-        assert "_pyhandlexl_tables" in list_sheets(data_sheet)
+        assert "_pyhandlexl_tables" not in list_sheets(data_sheet)

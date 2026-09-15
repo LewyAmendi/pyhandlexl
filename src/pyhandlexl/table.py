@@ -97,11 +97,15 @@ class Table:
         for label in self._row_labels:
             if not isinstance(label, str):
                 raise TypeError(f"row labels must be str, got {type(label).__name__}: {label!r}")
+            if not label:
+                raise ValueError("row labels must not be empty")
         for header in self._column_headers:
             if not isinstance(header, str):
                 raise TypeError(
                     f"column headers must be str, got {type(header).__name__}: {header!r}"
                 )
+            if not header:
+                raise ValueError("column headers must not be empty")
         if not self._column_headers:
             raise ValueError("column_headers must not be empty")
         if not isinstance(self._style, TableStyle):
@@ -217,13 +221,8 @@ class Table:
         """This table's name."""
         return self._name
 
-    @property
-    def corner(self) -> str:
-        """The value of cell A1 (always ``str``). Settable — this is how you change it."""
-        return self._corner
-
-    @corner.setter
-    def corner(self, value: str) -> None:
+    def set_corner(self, value: str) -> None:
+        """Change the value of cell A1. Read it back through ``t.data.corner``."""
         if not isinstance(value, str):
             raise TypeError(f"corner must be str, got {type(value).__name__}: {value!r}")
         self._corner = value
@@ -397,8 +396,8 @@ class Table:
 
         Same addressing as :meth:`read_cell`. Only ever sets data — by
         position, addressing a header, row label, or the corner raises
-        ``ValueError``; use :meth:`rename_column`, :meth:`rename_row`, or the
-        ``corner`` property for those. By label there's no other kind of cell
+        ``ValueError``; use :meth:`rename_column`, :meth:`rename_row`, or
+        :meth:`set_corner` for those. By label there's no other kind of cell
         to reach, so it always sets data.
         """
         is_position, r, c = self._dispatch(ref, row, column)
@@ -410,7 +409,7 @@ class Table:
     def _set_by_position(self, row: int, col_num: int, value: object) -> None:
         kind, i, j = self._classify(row, col_num)
         if kind == "corner":
-            raise ValueError("that cell is the corner — set it with table.corner = value")
+            raise ValueError("that cell is the corner — set it with table.set_corner(value)")
         if kind == "header":
             raise ValueError("that cell is a column header — rename it with rename_column()")
         if kind == "label":
@@ -438,6 +437,8 @@ class Table:
     def _check_new_row(self, label: str, values: list[object]) -> None:
         if not isinstance(label, str):
             raise TypeError(f"row label must be str, got {type(label).__name__}: {label!r}")
+        if not label:
+            raise ValueError("row label must not be empty")
         if label in self._row_labels:
             raise ValueError(f"row label {label!r} already exists")
         if len(values) != self._width():
@@ -473,6 +474,8 @@ class Table:
     def _check_new_column(self, header: str, values: list[object]) -> None:
         if not isinstance(header, str):
             raise TypeError(f"column header must be str, got {type(header).__name__}: {header!r}")
+        if not header:
+            raise ValueError("column header must not be empty")
         if header in self._column_headers:
             raise ValueError(f"column header {header!r} already exists")
         if len(values) != len(self._data):
@@ -529,6 +532,8 @@ class Table:
         """Change a row label; *new* must not already be in use (``ValueError``)."""
         if not isinstance(new, str):
             raise TypeError(f"row label must be str, got {type(new).__name__}: {new!r}")
+        if not new:
+            raise ValueError("row label must not be empty")
         i = self._row_index(old)
         if new != old and new in self._row_labels:
             raise ValueError(f"row label {new!r} already exists")
@@ -538,6 +543,8 @@ class Table:
         """Change a column header; *new* must not already be in use (``ValueError``)."""
         if not isinstance(new, str):
             raise TypeError(f"column header must be str, got {type(new).__name__}: {new!r}")
+        if not new:
+            raise ValueError("column header must not be empty")
         j = self._column_index(old)
         if new != old and new in self._column_headers:
             raise ValueError(f"column header {new!r} already exists")

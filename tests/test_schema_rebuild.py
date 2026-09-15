@@ -13,6 +13,7 @@ from pyhandlexl import (
     create_sheet,
     list_tables,
 )
+from pyhandlexl import _multi_table as mt
 from pyhandlexl._multi_table import SCHEMA_SHEET
 
 
@@ -105,39 +106,62 @@ class TestRebuildMultipleTables:
         assert set(names) == {"First", "Second"}
 
 
+def _plant_raw_table(
+    path, sheet: str, name: str, corner: str, headers: list, rows: list[list]
+) -> None:
+    """Hand-write a table's cells directly, bypassing Table's own validation.
+
+    Column headers/row labels can no longer be "" through the public API
+    (see test_table.py's empty-header/label validation tests), but a
+    hand-edited or pre-existing workbook can still contain one — these tests
+    exercise the rebuild scanner's tolerance for that, independent of what
+    the API itself allows.
+    """
+    wb = load_workbook(path)
+    ws = wb[sheet]
+    ws.cell(row=1, column=1, value="TABLE NAME")
+    ws.cell(row=1, column=2, value=name)
+    ws.cell(row=2, column=1, value=corner)
+    for j, header in enumerate(headers):
+        ws.cell(row=2, column=2 + j, value=header)
+    for i, row in enumerate(rows):
+        ws.cell(row=3 + i, column=1, value=row[0])
+        for j, value in enumerate(row[1]):
+            ws.cell(row=3 + i, column=2 + j, value=value)
+    wb.save(path)
+
+
 class TestRebuildEdgeCases:
+    """Blank headers/labels can't be created via the API anymore, but the
+    scanner must still tolerate one already sitting in a hand-edited or
+    pre-existing sheet rather than mistaking it for the table's end."""
+
     def test_blank_header_in_the_middle_is_not_mistaken_for_the_end(self, data_sheet):
-        Table(column_headers=["a", "", "c"], name="T").create(data_sheet, sheet="Data")
-        _delete_schema_sheet(data_sheet)
+        _plant_raw_table(data_sheet, "Data", "T", "", ["a", "", "c"], [])
 
         with pytest.warns(SchemaRebuiltWarning):
-            t = Table.read(data_sheet, "T")
-        assert t.data.column_headers == ["a", "", "c"]
+            list_tables(data_sheet)
+        entry = mt.load_schema(load_workbook(data_sheet))["T"]
+        assert entry.n_cols == 3
+        assert entry.n_rows == 0
 
     def test_blank_row_label_in_the_middle_is_not_mistaken_for_the_end(self, data_sheet):
-        Table(
-            data=[[1], [2], [3]],
-            column_headers=["x"],
-            row_labels=["r1", "", "r3"],
-            name="T",
-        ).create(data_sheet, sheet="Data")
-        _delete_schema_sheet(data_sheet)
+        _plant_raw_table(data_sheet, "Data", "T", "", ["x"], [["r1", [1]], ["", [2]], ["r3", [3]]])
 
         with pytest.warns(SchemaRebuiltWarning):
-            t = Table.read(data_sheet, "T")
-        assert t.data.row_labels == ["r1", "", "r3"]
-        assert t.data.rows == [[1], [2], [3]]
+            list_tables(data_sheet)
+        entry = mt.load_schema(load_workbook(data_sheet))["T"]
+        assert entry.n_cols == 1
+        assert entry.n_rows == 3
 
     def test_blank_label_but_real_data_is_kept(self, data_sheet):
-        Table(data=[[1, 2]], column_headers=["a", "b"], row_labels=[""], name="T").create(
-            data_sheet, sheet="Data"
-        )
-        _delete_schema_sheet(data_sheet)
+        _plant_raw_table(data_sheet, "Data", "T", "", ["a", "b"], [["", [1, 2]]])
 
         with pytest.warns(SchemaRebuiltWarning):
-            t = Table.read(data_sheet, "T")
-        assert t.data.row_labels == [""]
-        assert t.data.rows == [[1, 2]]
+            list_tables(data_sheet)
+        entry = mt.load_schema(load_workbook(data_sheet))["T"]
+        assert entry.n_cols == 2
+        assert entry.n_rows == 1
 
 
 class TestRebuildStyle:

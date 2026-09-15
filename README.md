@@ -124,8 +124,8 @@ non-`str` label/header/corner raises `TypeError`. Data values keep their type.
 ### The whole table at once
 
 ```python
-t.corner       # value of cell A1 (settable: t.corner = "name")
-t.data         # a TableData snapshot
+t.set_corner("name")  # changes the value of cell A1
+t.data                 # a TableData snapshot — read the corner via t.data.corner
 ```
 
 ```python
@@ -227,18 +227,20 @@ t.drop_column("q2")
 
 t.rename_row("Alice", "ALICE")
 t.rename_column("q1", "Q1")
-t.corner = "name"
+t.set_corner("name")
 ```
 
 `set_cell` only ever touches **data** — addressing a header, row label, or the
 corner by position raises `ValueError`; use `rename_row`, `rename_column`, or
-`t.corner = value` for those. Wrong-length values, and a name that would
-duplicate an existing label/header, raise `ValueError`; unknown labels raise
-`KeyError`; a non-`str` row label, column header, or corner raises `TypeError`.
-Data values may be any type; a value Excel can't store is caught on `.write()`
-(`CellTypeError`), not when it's set. `drop_column` refuses to remove a
-table's only remaining column (`ValueError`) — `column_headers` is required
-and can never end up empty.
+`set_corner` for those. Wrong-length values, and a name that would duplicate
+an existing label/header, raise `ValueError`; unknown labels raise `KeyError`;
+a non-`str` row label, column header, or corner raises `TypeError`. A row
+label or column header can never be `""` — that raises `ValueError` too (the
+corner has no such restriction; it may be empty). Data values may be any
+type; a value Excel can't store is caught on `.write()` (`CellTypeError`),
+not when it's set. `drop_column` refuses to remove a table's only remaining
+column (`ValueError`) — `column_headers` is required and can never end up
+empty.
 
 `insert_row`/`insert_column` take a 1-based position among existing data rows/
 columns: `1` inserts as the new first one; `len(...) + 1` inserts as the last
@@ -298,7 +300,7 @@ Three ready-made looks:
 
 | | header/labels | data banding | border |
 |---|---|---|---|
-| `TableStyle.DEFAULT` | bold, white on blue | light gray stripe | thick outer, medium header line |
+| `TableStyle.DEFAULT` | bold, black on olive green | light gray stripe | thick outer, medium header line |
 | `TableStyle.MINIMAL` | bold, plain colors | none | thick outer, medium header line |
 | `TableStyle.NONE` | plain | none | none |
 
@@ -308,8 +310,8 @@ font colors are always required):
 
 ```python
 TableStyle(
-    header_font_name="Calibri", header_font_size=11, header_font_color="FFFFFF",
-    header_bold=True, header_fill="4472C4",
+    header_font_name="Calibri", header_font_size=11, header_font_color="000000",
+    header_bold=True, header_fill="76933C",
     data_font_name="Calibri", data_font_size=11, data_font_color="000000",
     band_fill="F2F2F2", border_color="000000",
 )
@@ -385,7 +387,8 @@ to a different sheet, or resized by hand, `pyhandlexl` reports it missing
 rather than guessing further.
 
 The tracking data itself lives in a reserved worksheet, `_pyhandlexl_tables`
-— it shows up in `list_sheets()` like any other sheet. Leave it alone.
+— `list_sheets()` never shows it, since it isn't a sheet you created or can
+write to. Leave it alone.
 
 **If that reserved sheet is deleted entirely**, self-heal can't help — it
 only relocates a table it already has a schema entry for. Instead,
@@ -442,14 +445,16 @@ since they only ever touch the `list[list]` these return, never a file.
 ```python
 from pyhandlexl import read_sheet, write_sheet, append_rows
 
-read_sheet(path, sheet=None, *, pad=False)
+read_sheet(path, sheet=None, *, pad=False, orientation="rows")
 ```
 
 For an **.xlsx** file: returns `list[list[object]]` — each cell as its
 native type (`str`, `int`, `float`, `bool`, `datetime`, `date`, `time`,
 `timedelta`), an empty cell as `None`. Trailing `None` values are trimmed
 from each row (a fully empty row becomes `[]`); `pad=True` right-pads every
-row with `None` to the widest row's length instead.
+row with `None` to the widest row's length instead. `orientation="columns"`
+returns each worksheet column as an inner list instead — the transpose of
+`"rows"`, with the same trimming/`pad` rules applied down each column.
 
 ```python
 write_sheet(path, rows, sheet=None, *, orientation="rows")
