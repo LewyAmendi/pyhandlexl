@@ -99,6 +99,18 @@ class TestConstruction:
         with pytest.raises(TypeError):
             Table(data=[["1"]], column_headers=["a"], row_labels=["x"], corner=2026, name="T")
 
+    def test_empty_corner_is_allowed(self):
+        t = Table(data=[["1"]], column_headers=["a"], row_labels=["x"], corner="", name="T")
+        assert t.data.corner == ""
+
+    def test_empty_column_header_raises(self):
+        with pytest.raises(ValueError):
+            Table(data=[["1"]], column_headers=[""], row_labels=["x"], name="T")
+
+    def test_empty_row_label_raises(self):
+        with pytest.raises(ValueError):
+            Table(data=[["1"]], column_headers=["a"], row_labels=[""], name="T")
+
     def test_constructor_allows_duplicate_labels(self):
         # the API blocks *creating* duplicates; ingesting them is allowed
         t = Table(data=[["1"], ["2"]], column_headers=["a"], row_labels=["dup", "dup"], name="T")
@@ -122,13 +134,12 @@ class TestData:
         assert sample.data.column_headers == ["North", "South", "East"]
 
     def test_corner_is_settable(self, sample):
-        sample.corner = "Quarter"
-        assert sample.corner == "Quarter"
+        sample.set_corner("Quarter")
         assert sample.data.corner == "Quarter"
 
     def test_setting_non_string_corner_raises(self, sample):
         with pytest.raises(TypeError):
-            sample.corner = 2026
+            sample.set_corner(2026)
 
 
 class TestToFromDict:
@@ -179,7 +190,7 @@ class TestToFromDict:
             Table.from_dict({"r1": [1, 2]}, name="T")
 
     def test_to_dict_round_trips_through_from_dict(self, sample):
-        rebuilt = Table.from_dict(sample.to_dict(), corner=sample.corner, name="T")
+        rebuilt = Table.from_dict(sample.to_dict(), corner=sample.data.corner, name="T")
         assert rebuilt.data.rows == sample.data.rows
         assert rebuilt.data.column_headers == sample.data.column_headers
         assert rebuilt.data.row_labels == sample.data.row_labels
@@ -417,6 +428,10 @@ class TestAdd:
         with pytest.raises(ValueError):
             sample.add_row("Revenue", [1, 2, 3])
 
+    def test_add_row_empty_label_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.add_row("", [1, 2, 3])
+
     def test_add_column(self, sample):
         sample.add_column("West", [10, 20])
         assert sample.data.column_headers == ["North", "South", "East", "West"]
@@ -434,6 +449,10 @@ class TestAdd:
     def test_add_column_duplicate_header_raises(self, sample):
         with pytest.raises(ValueError):
             sample.add_column("North", [10, 20])
+
+    def test_add_column_empty_header_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.add_column("", [10, 20])
 
     def test_insert_row_at_start(self, sample):
         sample.insert_row(1, "Forecast", [1, 2, 3])
@@ -546,6 +565,12 @@ class TestRemoveAndRename:
             sample.rename_row("Revenue", 123)
         with pytest.raises(TypeError):
             sample.rename_column("North", 123)
+
+    def test_rename_to_empty_raises(self, sample):
+        with pytest.raises(ValueError):
+            sample.rename_row("Revenue", "")
+        with pytest.raises(ValueError):
+            sample.rename_column("North", "")
 
     def test_rename_to_existing_label_raises(self, sample):
         with pytest.raises(ValueError):

@@ -149,31 +149,39 @@ def read_sheet(
     sheet: str | None = None,
     *,
     pad: bool = False,
+    orientation: Orientation = "rows",
 ) -> list[list[object]]:
-    """Read a worksheet — or a .csv file — as a list of rows.
+    """Read a worksheet — or a .csv file — as a list of rows (or columns).
 
     For an **.xlsx** file, values come back as ``str``, ``int``, ``float``,
     ``bool``, ``datetime``, ``date``, ``time``, or ``timedelta``, with an
     empty cell as ``None``; trailing ``None`` values are trimmed from each
-    row, so a fully empty row becomes ``[]``. For a **.csv** file every
-    value is a plain ``str`` instead, exactly as written — CSV has no other
-    type to preserve, and rows are read exactly as they are, with no
-    trimming.
+    row (or column, with ``orientation="columns"``), so a fully empty one
+    becomes ``[]``. For a **.csv** file every value is a plain ``str``
+    instead, exactly as written — CSV has no other type to preserve, and
+    rows are read exactly as they are, with no trimming.
 
     Args:
         path: the .xlsx or .csv file.
         sheet: worksheet name, or ``None`` for the active sheet. Must be
             ``None`` for a .csv file — it has no sheets.
-        pad: if true, right-pad every row with ``None`` (``""`` for a .csv
-            file) to the length of the longest row, making the result
-            rectangular.
+        pad: if true, right-pad every row (or column) with ``None`` (``""``
+            for a .csv file) to the length of the longest one, making the
+            result rectangular.
+        orientation: ``"rows"`` (default) returns each worksheet row as an
+            inner list; ``"columns"`` returns each worksheet column as an
+            inner list instead — the transpose of ``"rows"``.
 
     Raises:
         FileNotFoundError: no file at *path*.
         InvalidFileError: the file is not a readable .xlsx.
         SheetNotFoundError: *sheet* names a worksheet that does not exist.
-        ValueError: *sheet* is given for a .csv file.
+        ValueError: *orientation* is not ``"rows"`` or ``"columns"``, or
+            *sheet* is given for a .csv file.
     """
+    if orientation not in ("rows", "columns"):
+        raise ValueError(f"orientation must be 'rows' or 'columns', got {orientation!r}")
+
     path = Path(path)
     if _is_csv_path(path):
         if sheet is not None:
@@ -201,6 +209,13 @@ def read_sheet(
         finally:
             workbook.close()
         fill = None
+
+    if orientation == "columns":
+        rows = [list(column) for column in zip_longest(*rows, fillvalue=fill)]
+        if fill is None:
+            for column in rows:
+                while column and column[-1] is None:
+                    column.pop()
 
     if pad and rows:
         width = max(len(row) for row in rows)
@@ -458,13 +473,16 @@ def export_xl_to_csv(
 def list_sheets(path: str | Path) -> list[str]:
     """Return the worksheet names in *path*, in order.
 
+    The reserved ``_pyhandlexl_tables`` schema sheet is never included — it
+    isn't a sheet a caller created or can write to.
+
     Raises:
         FileNotFoundError: no file at *path*.
         InvalidFileError: the file is not a readable .xlsx.
     """
     workbook = safe_load(path)
     try:
-        return list(workbook.sheetnames)
+        return [name for name in workbook.sheetnames if name != mt.SCHEMA_SHEET]
     finally:
         workbook.close()
 

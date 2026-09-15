@@ -60,7 +60,7 @@ class TestPaintGeometry:
         for col in (1, 2, 3):
             cell = _cell(painted, 2, col)
             assert cell.font.bold is True
-            assert cell.font.color.rgb == "00FFFFFF"
+            assert cell.font.color.rgb == "00000000"
             assert cell.fill.fill_type == "solid"
 
     def test_label_column_is_bold_and_filled(self, painted):

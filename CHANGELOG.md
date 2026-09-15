@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`TableStyle.DEFAULT`'s header/label look**: black text (was white) on an
+  olive green fill (was blue) — `header_font_color="000000"`,
+  `header_fill="76933C"` — for better contrast. `TableStyle.MINIMAL` no
+  longer needs to override the font color to get there itself.
+- **`list_sheets()` no longer includes the reserved `_pyhandlexl_tables`
+  schema sheet** — it isn't a sheet you created or can write to, so it's
+  filtered out rather than shown like any other sheet.
+- **`Table.corner` is no longer a property.** Set it with
+  `t.set_corner(value)` (still `str`-only, still raises `TypeError`
+  otherwise); read it through `t.data.corner`, same as every other field on
+  the read-only snapshot.
+- **Column headers and row labels can no longer be `""`.** Constructing a
+  `Table`, or calling `add_row`/`add_column`/`insert_row`/`insert_column`/
+  `rename_row`/`rename_column` with an empty one, now raises `ValueError`.
+  The corner is unaffected — it may still be `""`. The automatic schema
+  rebuild (see 0.9.0 below) still tolerates a blank header/label already
+  sitting in a hand-edited or pre-existing sheet; it just can't be created
+  through the API anymore.
+- **`read_sheet` gained an `orientation` parameter**, matching
+  `write_sheet`: `"rows"` (default, unchanged) returns each worksheet row as
+  an inner list; `"columns"` returns each worksheet column as an inner list
+  instead — the transpose of `"rows"`, with the same trailing-empty
+  trimming/`pad` rules applied down each column.
+
 ## [0.9.0] — 2026-09-15
 
 ### Added

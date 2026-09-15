@@ -12,9 +12,9 @@ class TestDefaults:
         s = TableStyle()
         assert s.header_font_name == "Calibri"
         assert s.header_font_size == 11
-        assert s.header_font_color == "FFFFFF"
+        assert s.header_font_color == "000000"
         assert s.header_bold is True
-        assert s.header_fill == "4472C4"
+        assert s.header_fill == "76933C"
         assert s.data_font_name == "Calibri"
         assert s.data_font_size == 11
         assert s.data_font_color == "000000"
