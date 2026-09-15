@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-09-15
+
 ### Changed
 - **`TableStyle.DEFAULT`'s header/label look**: black text (was white) on an
   olive green fill (was blue) — `header_font_color="000000"`,
@@ -346,7 +348,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.7.0...v0.7.1
