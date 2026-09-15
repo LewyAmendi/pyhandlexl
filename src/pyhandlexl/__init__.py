@@ -24,11 +24,13 @@ from pyhandlexl.errors import (
     FileLockedError,
     InvalidFileError,
     PyhandlexlError,
+    SchemaRebuiltWarning,
     SheetNameError,
     SheetNotFoundError,
     TableExistsError,
     TableNotFoundError,
 )
+from pyhandlexl.style import TableStyle
 from pyhandlexl.table import Table, TableData
 from pyhandlexl.validate import (
     check_cell_value,
@@ -45,12 +47,14 @@ __all__ = [
     "FileLockedError",
     "InvalidFileError",
     "PyhandlexlError",
+    "SchemaRebuiltWarning",
     "SheetNameError",
     "SheetNotFoundError",
     "Table",
     "TableData",
     "TableExistsError",
     "TableNotFoundError",
+    "TableStyle",
     "append_rows",
     "check_cell_value",
     "check_dimensions",

@@ -275,6 +275,50 @@ writes it back to its tracked location — no `sheet=` needed, and
 deleted). The file must already exist for either call — see
 [Files](#files).
 
+### Styling a table
+
+Every table is visually styled when it's created or written: bold, filled
+headers and row labels; alternating row colors; a thick border around the
+whole table with a heavier line separating headers/labels from data. This
+is a real property of the table, not a one-time paint job — adding a row or
+column extends the same look to cover it, and a table shifted right to make
+room for a growing neighbor (see
+[Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet))
+keeps its look at the new position too.
+
+```python
+from pyhandlexl import Table, TableStyle
+
+t = Table(data=[[10, 20]], column_headers=["q1", "q2"], row_labels=["Alice"], name="Budget")
+t.style                       # TableStyle.DEFAULT, unless you passed style=
+t.style = TableStyle.MINIMAL  # takes effect on the next create()/write()
+```
+
+Three ready-made looks:
+
+| | header/labels | data banding | border |
+|---|---|---|---|
+| `TableStyle.DEFAULT` | bold, white on blue | light gray stripe | thick outer, medium header line |
+| `TableStyle.MINIMAL` | bold, plain colors | none | thick outer, medium header line |
+| `TableStyle.NONE` | plain | none | none |
+
+For anything else, build one — every field is a plain 6-digit hex color
+(`""` means "none," for `header_fill`/`band_fill`/`border_color` only —
+font colors are always required):
+
+```python
+TableStyle(
+    header_font_name="Calibri", header_font_size=11, header_font_color="FFFFFF",
+    header_bold=True, header_fill="4472C4",
+    data_font_name="Calibri", data_font_size=11, data_font_color="000000",
+    band_fill="F2F2F2", border_color="000000",
+)
+```
+
+Styling never touches `t.data` or equality — `t1 == t2` compares data,
+headers, labels, and corner only, however differently the two are styled.
+It has no effect on `.csv` files — there's nothing there to style.
+
 ### Equality
 
 ```python
@@ -322,7 +366,8 @@ sales.write("shop.xlsx")                          # Inventory shifts right autom
   automatically shifts every table to its right, on the same sheet, further
   right to make room — this can rewrite more than one table's position in a
   single `.write()`. **Growing rows never shifts anything**, since nothing sits
-  below a table.
+  below a table. A shifted table keeps its
+  [style](#styling-a-table) at the new position.
 - **Duplicate row labels/column headers within one table** are blocked the
   same way regardless of how many tables share the sheet.
 
@@ -341,6 +386,23 @@ rather than guessing further.
 
 The tracking data itself lives in a reserved worksheet, `_pyhandlexl_tables`
 — it shows up in `list_sheets()` like any other sheet. Leave it alone.
+
+**If that reserved sheet is deleted entirely**, self-heal can't help — it
+only relocates a table it already has a schema entry for. Instead,
+`Table.read`, `Table.write`, `delete_table`, and `list_tables` all
+automatically rebuild the whole schema by scanning every sheet for
+`"TABLE NAME"` markers the moment they find it missing, emitting a
+`SchemaRebuiltWarning` and persisting the reconstruction so the scan isn't
+repeated next time. A table's position and size come back exact — markers
+bound each other directly, and there's nowhere legitimate for real content
+to sit past a table's true edge. Its **style is a best-effort
+reconstruction** read back from the cells themselves, and can be
+imperfect: a table with exactly one data row, for instance, can never have
+its row-banding detected (there's no second row to compare against), so it
+always comes back reporting no banding even if it originally had some. Two
+markers found claiming the same name can't be safely resolved either — that
+table is left out of the rebuilt schema (named in the warning) rather than
+guessing which one is real; every unambiguous table is unaffected.
 
 ### Displaying a table
 
@@ -637,9 +699,17 @@ All raised exceptions derive from `PyhandlexlError`:
 | `TableExistsError` | `ValueError` | a named table with that name already exists |
 | `InvalidFileError` | — | file is missing or not a readable `.xlsx` |
 
+`SchemaRebuiltWarning` is not in this table on purpose — it's a `Warning`
+(via Python's `warnings` module), not a `PyhandlexlError`. The operation
+that triggers it still succeeds; see
+[Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet)
+for when it fires.
+
 ## Not in scope
 
-`pyhandlexl` deliberately does **not** handle: cell formatting, styles, fonts,
+`pyhandlexl` deliberately does **not** handle: arbitrary cell-level
+formatting (`Table`'s own [styling](#styling-a-table) is a curated set of
+choices, not a general "format any cell" API), conditional formatting,
 formulas, charts, images, merged cells, `.xls` (old format), or password
 protection / encryption. For any of that, use openpyxl directly.
 

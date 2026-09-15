@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Every table is now visually styled** — bold, filled headers and row
+  labels; alternating data-row colors; a thick outer border with a medium
+  line separating headers/labels from data. Applied on `create()`/`write()`
+  and re-applied in full every time, so adding a row or column extends the
+  same look automatically, and a table shifted right by a growing neighbor
+  keeps its look at the new position.
+  - `TableStyle` (new, exported) — a frozen dataclass of hex colors, font
+    name/size, and bold/fill/border choices. `TableStyle.DEFAULT`,
+    `.MINIMAL`, and `.NONE` cover the common cases; construct your own for
+    anything else. Validates its fields (must be a real 6-digit hex color,
+    a positive font size, etc.) at construction.
+  - `Table(..., style=...)` — defaults to `TableStyle.DEFAULT`. Readable and
+    settable via `t.style`; a change takes effect (and is persisted) on the
+    next `create()`/`write()`.
+  - Persisted per table in the reserved `_pyhandlexl_tables` schema sheet,
+    so a table keeps exactly the look it was created with even if a
+    preset's definition changes later, and `Table.read()` restores it.
+  - Style is excluded from `Table` equality (`t1 == t2` still compares only
+    data, headers, labels, and corner) and has no effect on `.csv` files.
+
+- **Automatic recovery if the reserved `_pyhandlexl_tables` schema sheet is
+  deleted entirely** — something self-heal couldn't do, since it only
+  relocates a table it already has a schema entry for. `Table.read`,
+  `Table.write`, `delete_table`, and `list_tables` now rebuild the whole
+  schema by scanning every sheet for `"TABLE NAME"` markers the moment they
+  find it missing, and persist the reconstruction so the scan isn't
+  repeated on the next call.
+  - `SchemaRebuiltWarning` (new, exported) — a `Warning`, not a
+    `PyhandlexlError`; the triggering operation still succeeds. Fires only
+    when the scan actually finds something to recover — a genuinely
+    table-less workbook stays silent and gets no schema sheet written.
+  - Position and size come back exact: markers bound each other directly on
+    a shared sheet, and nothing legitimate is ever placed past a table's
+    real content otherwise. A table's *style* is a best-effort
+    reconstruction read back from its cells, which can be imperfect — most
+    notably, a table with exactly one data row can never have its row
+    banding detected (there's no second row to compare against), so it
+    always comes back reporting none.
+  - Two markers found claiming the same name can't be safely resolved —
+    that table is left out of the rebuilt schema (named in the warning)
+    rather than guessing which one is real; every unambiguous table on the
+    same workbook is unaffected.
+
+### Fixed
+- **Deleting or shrinking a table could leave "ghost" formatted-but-empty
+  cells behind**, inflating the worksheet's saved dimensions the same way
+  Excel treats a styled blank cell as "in use." `clear_region` (used by
+  `delete_table` and by `write()` when a table gets smaller) now fully
+  resets a cleared cell's style, not just its value.
+
 ## [0.8.0] — 2026-09-14
 
 ### Added
