@@ -472,13 +472,23 @@ def list_sheets(path: str | Path) -> list[str]:
 def list_tables(path: str | Path) -> list[str]:
     """Return the names of every named table in the workbook (see ``Table.create``).
 
+    If the reserved schema sheet is missing entirely, it's automatically
+    rebuilt by scanning the workbook for table markers first — see
+    :class:`~pyhandlexl.errors.SchemaRebuiltWarning`. This can make listing
+    tables write to the file, so the scan isn't repeated on the next call.
+
     Raises:
         FileNotFoundError: no file at *path*.
         InvalidFileError: the file is not a readable .xlsx.
     """
     workbook = safe_load(path)
     try:
-        return list(mt.load_schema(workbook).keys())
+        schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
+        entries = mt.load_schema(workbook)
+        if not schema_existed and entries:
+            mt.save_schema(workbook, entries)
+            atomic_save(workbook, path)
+        return list(entries.keys())
     finally:
         workbook.close()
 

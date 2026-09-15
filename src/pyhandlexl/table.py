@@ -25,6 +25,7 @@ from openpyxl.utils import coordinate_to_tuple
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._safety import atomic_save, safe_load
 from pyhandlexl.errors import SheetNotFoundError
+from pyhandlexl.style import TableStyle
 from pyhandlexl.validate import check_cell_value, check_dimensions
 
 
@@ -51,6 +52,9 @@ class Table:
     required; a table with no rows yet still needs its columns defined), or
     with :meth:`read` from a file. Mutation methods edit the table in place
     and return ``None``. Row labels and column headers are always ``str``.
+
+    Every table is visually styled — see :class:`pyhandlexl.style.TableStyle`
+    — defaulting to ``TableStyle.DEFAULT`` unless ``style=`` says otherwise.
     """
 
     def __init__(
@@ -61,6 +65,7 @@ class Table:
         *,
         column_headers: Iterable[str],
         name: str,
+        style: TableStyle | None = None,
     ) -> None:
         # A bare str is technically Iterable[str] — iterating it silently splits
         # it into one column/row per character. That's never what's meant, so
@@ -81,6 +86,7 @@ class Table:
         self._row_labels: list[str] = list(row_labels)
         self._corner: str = corner
         self._name: str = name
+        self._style: TableStyle = style if style is not None else TableStyle.DEFAULT
         self._validate()
 
     def _validate(self) -> None:
@@ -98,6 +104,8 @@ class Table:
                 )
         if not self._column_headers:
             raise ValueError("column_headers must not be empty")
+        if not isinstance(self._style, TableStyle):
+            raise TypeError(f"style must be a TableStyle, got {type(self._style).__name__}")
         if not isinstance(self._corner, str):
             got = type(self._corner).__name__
             raise TypeError(f"corner must be str, got {got}: {self._corner!r}")
@@ -121,12 +129,18 @@ class Table:
     def read(cls, path: str | Path, name: str) -> Table:
         """Read the named table called *name*.
 
+        If the reserved schema sheet is missing entirely, it's automatically
+        rebuilt by scanning the workbook for table markers first — see
+        :class:`~pyhandlexl.errors.SchemaRebuiltWarning`. This can make a
+        `read` write to the file, the same way a self-heal can.
+
         Raises:
             TableNotFoundError: no such table exists, or its marker cannot be
                 found on its recorded sheet.
         """
         workbook = safe_load(path)
         try:
+            schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
             entries = mt.load_schema(workbook)
             entry = mt.get_entry(entries, name)
             located = mt.verify_or_locate(workbook, entry)
@@ -144,10 +158,13 @@ class Table:
             headers = [_to_label(h) for h in block[0][1:]]
             labels = [_to_label(row[0]) for row in block[1:]]
             data = [list(row[1:]) for row in block[1:]]
-            table = cls(data, labels, corner, column_headers=headers, name=name)
+            table = cls(
+                data, labels, corner, column_headers=headers, name=name, style=located.style
+            )
 
             if healed:
                 entries[name] = located
+            if healed or not schema_existed:
                 mt.save_schema(workbook, entries)
                 atomic_save(workbook, path)
             return table
@@ -210,6 +227,22 @@ class Table:
         if not isinstance(value, str):
             raise TypeError(f"corner must be str, got {type(value).__name__}: {value!r}")
         self._corner = value
+
+    @property
+    def style(self) -> TableStyle:
+        """This table's visual style — defaults to ``TableStyle.DEFAULT``.
+
+        Settable. A change takes effect (and is persisted) on the next
+        :meth:`create`/:meth:`write` — it repaints the table's full current
+        region, so it has no visible effect until then.
+        """
+        return self._style
+
+    @style.setter
+    def style(self, value: TableStyle) -> None:
+        if not isinstance(value, TableStyle):
+            raise TypeError(f"style must be a TableStyle, got {type(value).__name__}")
+        self._style = value
 
     @property
     def data(self) -> TableData:
@@ -618,7 +651,9 @@ class Table:
             mt.write_region(ws, entry.anchor_row, entry.anchor_col, [[mt.MARKER, self._name]])
             mt.write_region(ws, entry.anchor_row + 1, entry.anchor_col, assembled)
 
-            entries[self._name] = replace(entry, n_rows=new_n_rows, n_cols=new_n_cols)
+            updated_entry = replace(entry, n_rows=new_n_rows, n_cols=new_n_cols, style=self._style)
+            entries[self._name] = updated_entry
+            mt.paint_table(ws, updated_entry)
             mt.save_schema(workbook, entries)
             atomic_save(workbook, path)
         finally:
@@ -657,9 +692,11 @@ class Table:
             mt.write_region(ws, anchor_row, anchor_col, [[mt.MARKER, self._name]])
             mt.write_region(ws, anchor_row + 1, anchor_col, assembled)
 
-            entries[self._name] = mt.TableEntry(
-                self._name, sheet, anchor_row, anchor_col, n_rows, n_cols
+            entry = mt.TableEntry(
+                self._name, sheet, anchor_row, anchor_col, n_rows, n_cols, self._style
             )
+            entries[self._name] = entry
+            mt.paint_table(ws, entry)
             mt.save_schema(workbook, entries)
             atomic_save(workbook, path)
         finally:

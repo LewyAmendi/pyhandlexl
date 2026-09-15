@@ -38,3 +38,16 @@ class TableNotFoundError(PyhandlexlError, KeyError):
 
 class TableExistsError(PyhandlexlError, ValueError):
     """A named table with this name already exists in the workbook."""
+
+
+class SchemaRebuiltWarning(UserWarning):
+    """The reserved schema sheet was missing and has been reconstructed by
+    scanning the workbook for table markers.
+
+    Not a ``PyhandlexlError`` — the operation that triggered this still
+    succeeds. Geometry (position and size) is exact, reconstructed from the
+    markers themselves; a table's :class:`~pyhandlexl.style.TableStyle` is
+    read back from its painted cells on a best-effort basis and may not
+    exactly match what was originally set, especially if formatting was
+    edited by hand afterwards.
+    """
