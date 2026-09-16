@@ -24,7 +24,7 @@ from openpyxl.utils import coordinate_to_tuple
 
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._safety import atomic_save, safe_load
-from pyhandlexl.errors import SheetNotFoundError
+from pyhandlexl.errors import SheetKindError, SheetNotFoundError
 from pyhandlexl.style import TableStyle
 from pyhandlexl.validate import check_cell_value, check_dimensions
 
@@ -675,14 +675,24 @@ class Table:
         Raises:
             TableExistsError: a table named this already exists in the workbook.
             SheetNotFoundError: *sheet* does not exist.
+            SheetKindError: *sheet* already holds plain grid data (see
+                ``write_sheet``/``append_rows``), or is the reserved schema
+                sheet.
             CellTypeError: a data value is not a type Excel can store.
             DimensionError: the placed table would exceed Excel's grid limits.
         """
         workbook = safe_load(path)
         try:
+            if sheet == mt.SCHEMA_SHEET:
+                raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and cannot hold a table")
             if sheet not in workbook.sheetnames:
                 raise SheetNotFoundError(sheet)
             entries = mt.load_schema(workbook)
+            if mt.sheet_kind(workbook, entries, sheet) == "grid":
+                raise SheetKindError(
+                    f"sheet {sheet!r} holds plain grid data — placing a table there would "
+                    "corrupt it; use a different sheet, or clear_all_sheet_data() first"
+                )
             mt.check_not_exists(entries, self._name)
 
             assembled = self._assemble()

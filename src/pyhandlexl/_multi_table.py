@@ -485,6 +485,32 @@ def check_not_exists(entries: dict[str, TableEntry], name: str) -> None:
         raise TableExistsError(f"table {name!r} already exists")
 
 
+def drop_sheet_from_entries(entries: dict[str, TableEntry], sheet: str) -> dict[str, TableEntry]:
+    """A copy of *entries* with every entry for *sheet* removed."""
+    return {name: e for name, e in entries.items() if e.sheet != sheet}
+
+
+def rename_sheet_in_entries(
+    entries: dict[str, TableEntry], old: str, new: str
+) -> dict[str, TableEntry]:
+    """A copy of *entries* with every entry pointing at *old* moved to *new*."""
+    return {name: (replace(e, sheet=new) if e.sheet == old else e) for name, e in entries.items()}
+
+
+def sheet_kind(workbook, entries: dict[str, TableEntry], sheet: str) -> str:
+    """Whether *sheet* currently holds table data, grid data, or neither.
+
+    ``"table"`` if any entry in *entries* points at it; otherwise ``"grid"``
+    if it has any cell content; otherwise ``"empty"``.
+    """
+    if any(e.sheet == sheet for e in entries.values()):
+        return "table"
+    ws = workbook[sheet]
+    if any(value is not None for row in ws.iter_rows(values_only=True) for value in row):
+        return "grid"
+    return "empty"
+
+
 # ------------------------------------------------------------------ layout
 
 

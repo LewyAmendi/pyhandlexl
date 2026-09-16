@@ -3,6 +3,7 @@
 from pyhandlexl import grid
 from pyhandlexl.core import (
     append_rows,
+    clear_all_sheet_data,
     create_csv,
     create_sheet,
     create_workbook,
@@ -16,6 +17,7 @@ from pyhandlexl.core import (
     read_sheet,
     rename_sheet,
     sheet_exists,
+    sheet_kind,
     write_sheet,
 )
 from pyhandlexl.errors import (
@@ -25,6 +27,7 @@ from pyhandlexl.errors import (
     InvalidFileError,
     PyhandlexlError,
     SchemaRebuiltWarning,
+    SheetKindError,
     SheetNameError,
     SheetNotFoundError,
     TableExistsError,
@@ -48,6 +51,7 @@ __all__ = [
     "InvalidFileError",
     "PyhandlexlError",
     "SchemaRebuiltWarning",
+    "SheetKindError",
     "SheetNameError",
     "SheetNotFoundError",
     "Table",
@@ -59,6 +63,7 @@ __all__ = [
     "check_cell_value",
     "check_dimensions",
     "check_sheet_name",
+    "clear_all_sheet_data",
     "create_csv",
     "create_sheet",
     "create_workbook",
@@ -74,5 +79,6 @@ __all__ = [
     "read_sheet",
     "rename_sheet",
     "sheet_exists",
+    "sheet_kind",
     "write_sheet",
 ]
