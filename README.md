@@ -270,12 +270,13 @@ t.write(path)            # every write after that
 ```
 
 `create` places a brand-new named table on `sheet`: `TableExistsError` if the
-name is already taken, `SheetNotFoundError` if the sheet doesn't exist. Once a
-table has been created, `write` reassembles its headers, labels, and data and
-writes it back to its tracked location — no `sheet=` needed, and
-`TableNotFoundError` if the table was never created (or has since been
-deleted). The file must already exist for either call — see
-[Files](#files).
+name is already taken, `SheetNotFoundError` if the sheet doesn't exist,
+`SheetKindError` if `sheet` already holds plain grid data (see
+[One kind of data per sheet](#one-kind-of-data-per-sheet)). Once a table has
+been created, `write` reassembles its headers, labels, and data and writes it
+back to its tracked location — no `sheet=` needed, and `TableNotFoundError` if
+the table was never created (or has since been deleted). The file must
+already exist for either call — see [Files](#files).
 
 ### Styling a table
 
@@ -407,6 +408,36 @@ markers found claiming the same name can't be safely resolved either — that
 table is left out of the rebuilt schema (named in the warning) rather than
 guessing which one is real; every unambiguous table is unaffected.
 
+### One kind of data per sheet
+
+A worksheet holds **either** named tables **or** plain [grid data](#unorganised-data-the-grid-layout),
+never both — mixing them would let one silently corrupt the other (a grid
+write landing across a table's marker, say). Whichever kind writes to a
+sheet first claims it:
+
+```python
+from pyhandlexl import sheet_kind, clear_all_sheet_data
+
+sheet_kind(path, "Data")   # "empty", "grid", or "table"
+```
+
+- A fresh or freshly-cleared sheet is `"empty"` — either kind can claim it next.
+- `write_sheet`/`append_rows` claim it as `"grid"`; `Table.create` claims it as `"table"`.
+- Writing the other kind to an already-claimed sheet raises `SheetKindError`
+  rather than writing something that would corrupt what's already there:
+  `write_sheet`/`append_rows` refuse a `"table"` sheet, and `Table.create`
+  refuses a `"grid"` sheet. The reserved `_pyhandlexl_tables` schema sheet
+  can't be targeted directly by any of them either, or by `sheet_kind`
+  itself — it isn't a sheet with a kind of its own.
+- **`clear_all_sheet_data(path, sheet)`** wipes a sheet's cells, styles, and
+  any tables tracked on it, back to `"empty"` — the one way to reverse a
+  claim and let the sheet be reused as the other kind.
+
+`delete_sheet` and `rename_sheet` keep the schema in sync with reality:
+deleting a sheet forgets any tables that lived on it (instead of leaving
+stale, unreachable schema entries), and renaming one moves its tables'
+tracked location along with it — they stay readable under their same names.
+
 ### Displaying a table
 
 ```python
@@ -464,13 +495,16 @@ For an **.xlsx** file: replaces the target sheet with `rows` (other sheets
 untouched); adds `sheet` if it does not exist. Values are written with their
 type preserved — no conversion; `None` leaves the cell empty. A value that
 isn't a type Excel can store raises `CellTypeError`. `orientation="columns"`
-writes each inner list *down a column* instead of across a row.
+writes each inner list *down a column* instead of across a row. `sheet`
+must not already hold table data (`SheetKindError`) — see
+[One kind of data per sheet](#one-kind-of-data-per-sheet).
 
 ```python
 append_rows(path, rows, sheet=None)
 ```
 
 For an **.xlsx** file: appends after the last row. Empty input is a no-op.
+Same `SheetKindError` restriction as `write_sheet`.
 
 ### CSV rules for read_sheet, write_sheet, and append_rows
 
@@ -644,19 +678,24 @@ not exist yet. This applies to a `.csv` target exactly the same as `.xlsx`.
 ```python
 from pyhandlexl import (
     list_sheets, sheet_exists, create_sheet, delete_sheet, rename_sheet, list_tables,
+    sheet_kind, clear_all_sheet_data,
 )
 
 list_sheets(path)                 # ['Sheet', 'Data']
 sheet_exists(path, "Data")        # True
 create_sheet(path, "Results")     # ValueError if it already exists
-delete_sheet(path, "Old")         # refuses to delete the last sheet
-rename_sheet(path, "Old", "New")
+delete_sheet(path, "Old")         # refuses to delete the last sheet; forgets its tables too
+rename_sheet(path, "Old", "New")  # moves its tables' tracked location along with it
 list_tables(path)                 # every named table in the workbook (all sheets)
+sheet_kind(path, "Data")          # "empty", "grid", or "table" — see below
+clear_all_sheet_data(path, "Data")  # wipes it back to "empty"
 ```
 
 `create_sheet` needs an existing file (`create_workbook` first). Sheet names are
 validated everywhere: max 31 characters, none of `\ / ? * [ ] :`, and
-`"History"` is reserved by Excel.
+`"History"` is reserved by Excel. See
+[One kind of data per sheet](#one-kind-of-data-per-sheet) for `sheet_kind`
+and `clear_all_sheet_data`.
 
 ## Safe writes
 
@@ -702,6 +741,7 @@ All raised exceptions derive from `PyhandlexlError`:
 | `CellTypeError` | `TypeError` | a value is not a type Excel can store |
 | `TableNotFoundError` | `KeyError` | no named table with that name, or its marker is gone |
 | `TableExistsError` | `ValueError` | a named table with that name already exists |
+| `SheetKindError` | `ValueError` | the sheet already holds the other kind of data (table vs. grid), or is the reserved schema sheet |
 | `InvalidFileError` | — | file is missing or not a readable `.xlsx` |
 
 `SchemaRebuiltWarning` is not in this table on purpose — it's a `Warning`

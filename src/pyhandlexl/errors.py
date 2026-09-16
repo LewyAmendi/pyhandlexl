@@ -40,6 +40,20 @@ class TableExistsError(PyhandlexlError, ValueError):
     """A named table with this name already exists in the workbook."""
 
 
+class SheetKindError(PyhandlexlError, ValueError):
+    """A worksheet already holds the other kind of data.
+
+    A sheet holds either named tables or plain grid data, never both — the
+    first successful write claims it. ``write_sheet``/``append_rows`` refuse
+    a sheet that already holds a table (use ``Table.write``/``Table.create``
+    instead), and ``Table.create`` refuses a sheet that already holds plain
+    grid data (use ``write_sheet``/``append_rows`` instead). The reserved
+    ``_pyhandlexl_tables`` schema sheet can't be targeted by any of these
+    directly either way. Call ``clear_all_sheet_data`` to wipe a sheet back
+    to unclaimed so it can be written as the other kind.
+    """
+
+
 class SchemaRebuiltWarning(UserWarning):
     """The reserved schema sheet was missing and has been reconstructed by
     scanning the workbook for table markers.

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A worksheet now holds either named tables or plain grid data, never
+  both.** Whichever writes to a sheet first claims it: `write_sheet`/
+  `append_rows` claim it as `"grid"`; `Table.create` claims it as `"table"`.
+  Writing the other kind to an already-claimed sheet now raises
+  `SheetKindError` instead of silently risking corruption (a grid write
+  landing across a table's marker, or a table placed over unrelated grid
+  content). The reserved `_pyhandlexl_tables` schema sheet can't be
+  targeted directly by any of them either.
+  - `sheet_kind(path, sheet)` (new, exported) — `"table"`, `"grid"`, or
+    `"empty"` for a given sheet.
+  - `clear_all_sheet_data(path, sheet)` (new, exported) — wipes a sheet's
+    cells, styles, and any tables tracked on it back to `"empty"`, the one
+    way to reclaim it as the other kind.
+  - `SheetKindError` (new, exported) — a `PyhandlexlError` and `ValueError`.
+
+### Fixed
+- **`delete_sheet` and `rename_sheet` now keep the schema in sync.**
+  Deleting a sheet that held tables used to leave their schema entries
+  stale (pointing at a sheet that no longer exists); it now forgets them.
+  Renaming a table-holding sheet used to leave entries pointing at the old
+  name; it now updates them, so the tables stay readable under their same
+  names.
+
 ## [0.9.1] — 2026-09-15
 
 ### Changed

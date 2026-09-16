@@ -14,10 +14,11 @@ from openpyxl import Workbook
 
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._safety import atomic_save, safe_delete, safe_load
-from pyhandlexl.errors import SheetNotFoundError
+from pyhandlexl.errors import SheetKindError, SheetNotFoundError
 from pyhandlexl.validate import check_cell_value, check_dimensions, check_sheet_name
 
 Orientation = Literal["rows", "columns"]
+SheetKind = Literal["table", "grid", "empty"]
 
 # Extensions openpyxl recognises as Excel workbooks.
 _WORKBOOK_SUFFIXES = frozenset({".xlsx", ".xlsm", ".xltx", ".xltm"})
@@ -253,6 +254,9 @@ def write_sheet(
     Raises:
         FileNotFoundError: no file at *path*.
         SheetNameError: *sheet* is not a valid worksheet name.
+        SheetKindError: *sheet* already holds table data, or is the reserved
+            schema sheet (.xlsx only — a sheet has no such distinction in a
+            .csv file). See :class:`~pyhandlexl.errors.SheetKindError`.
         CellTypeError: a value is not a type Excel can store (.xlsx only).
         DimensionError: the data exceeds the .xlsx row or column limits
             (.xlsx only — a .csv file has no size limit).
@@ -284,7 +288,15 @@ def write_sheet(
     workbook = safe_load(path)
     try:
         name = sheet if sheet is not None else workbook.active.title
+        if name == mt.SCHEMA_SHEET:
+            raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and cannot be written to")
         if name in workbook.sheetnames:
+            entries = mt.load_schema(workbook)
+            if mt.sheet_kind(workbook, entries, name) == "table":
+                raise SheetKindError(
+                    f"sheet {name!r} holds table data — write_sheet() would corrupt it; "
+                    "use Table.write()/Table.create(), or clear_all_sheet_data() first"
+                )
             index = workbook.sheetnames.index(name)
             workbook.remove(workbook[name])
             worksheet = workbook.create_sheet(title=name, index=index)
@@ -343,6 +355,8 @@ def append_rows(
     Raises:
         FileNotFoundError: no file at *path*.
         SheetNameError: *sheet* is not a valid worksheet name.
+        SheetKindError: *sheet* already holds table data, or is the reserved
+            schema sheet (.xlsx only).
         CellTypeError: a value is not a type Excel can store (.xlsx only).
         DimensionError: appending would exceed the .xlsx row or column
             limits (.xlsx only).
@@ -373,6 +387,15 @@ def append_rows(
             worksheet = workbook[sheet]
         else:
             worksheet = workbook.create_sheet(title=sheet)
+
+        if worksheet.title == mt.SCHEMA_SHEET:
+            raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and cannot be written to")
+        entries = mt.load_schema(workbook)
+        if mt.sheet_kind(workbook, entries, worksheet.title) == "table":
+            raise SheetKindError(
+                f"sheet {worksheet.title!r} holds table data — append_rows() would corrupt "
+                "it; use Table.write()/Table.create(), or clear_all_sheet_data() first"
+            )
 
         widest = max(len(row) for row in grid)
         check_dimensions(worksheet.max_row + len(grid), max(widest, worksheet.max_column))
@@ -511,6 +534,71 @@ def list_tables(path: str | Path) -> list[str]:
         workbook.close()
 
 
+def sheet_kind(path: str | Path, sheet: str) -> SheetKind:
+    """Whether *sheet* currently holds table data, grid data, or neither.
+
+    A sheet holds either named tables or plain grid data, never both — the
+    first successful write claims it: ``"table"`` if ``Table.create`` has
+    placed one there, ``"grid"`` if ``write_sheet``/``append_rows`` has, or
+    ``"empty"`` if neither has (a fresh sheet, or one just wiped by
+    :func:`clear_all_sheet_data`). Writing the other kind to a sheet that
+    isn't ``"empty"`` raises :class:`~pyhandlexl.errors.SheetKindError`.
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        SheetNotFoundError: no worksheet called *sheet*.
+        SheetKindError: *sheet* is the reserved schema sheet — it has no
+            meaningful kind of its own.
+    """
+    workbook = safe_load(path)
+    try:
+        if sheet == mt.SCHEMA_SHEET:
+            raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and has no meaningful kind")
+        if sheet not in workbook.sheetnames:
+            raise SheetNotFoundError(sheet)
+        entries = mt.load_schema(workbook)
+        return mt.sheet_kind(workbook, entries, sheet)
+    finally:
+        workbook.close()
+
+
+def clear_all_sheet_data(path: str | Path, sheet: str) -> None:
+    """Wipe *sheet* back to a blank, unclaimed worksheet.
+
+    Every cell's value and style is removed, and any tables that lived
+    there are forgotten from the schema — afterwards :func:`sheet_kind`
+    reports ``"empty"`` again, so the sheet can be freely claimed by
+    ``write_sheet``/``append_rows`` (grid data) or ``Table.create`` (table
+    data), whichever writes to it first. Its position among the workbook's
+    other sheets is unchanged.
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        SheetNotFoundError: no worksheet called *sheet*.
+        SheetKindError: *sheet* is the reserved schema sheet.
+    """
+    workbook = safe_load(path)
+    try:
+        if sheet == mt.SCHEMA_SHEET:
+            raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and cannot be cleared")
+        if sheet not in workbook.sheetnames:
+            raise SheetNotFoundError(sheet)
+
+        schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
+        entries = mt.load_schema(workbook)
+        remaining = mt.drop_sheet_from_entries(entries, sheet)
+        on_disk = entries if schema_existed else {}
+        if remaining != on_disk:
+            mt.save_schema(workbook, remaining)
+
+        index = workbook.sheetnames.index(sheet)
+        workbook.remove(workbook[sheet])
+        workbook.create_sheet(title=sheet, index=index)
+        atomic_save(workbook, path)
+    finally:
+        workbook.close()
+
+
 def delete_table(path: str | Path, name: str) -> None:
     """Remove the named table called *name*.
 
@@ -564,6 +652,9 @@ def create_sheet(path: str | Path, name: str) -> None:
 def delete_sheet(path: str | Path, name: str) -> None:
     """Remove the worksheet called *name*.
 
+    Any tables that lived on *name* are forgotten from the schema too — not
+    just left behind as stale, unreachable entries.
+
     Raises:
         FileNotFoundError: no file at *path*.
         SheetNotFoundError: no worksheet called *name*.
@@ -576,6 +667,15 @@ def delete_sheet(path: str | Path, name: str) -> None:
         if len(workbook.sheetnames) == 1:
             raise ValueError("cannot delete the only sheet in the workbook")
         del workbook[name]
+
+        if name != mt.SCHEMA_SHEET:
+            schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
+            entries = mt.load_schema(workbook)
+            remaining = mt.drop_sheet_from_entries(entries, name)
+            on_disk = entries if schema_existed else {}
+            if remaining != on_disk:
+                mt.save_schema(workbook, remaining)
+
         atomic_save(workbook, path)
     finally:
         workbook.close()
@@ -583,6 +683,9 @@ def delete_sheet(path: str | Path, name: str) -> None:
 
 def rename_sheet(path: str | Path, old: str, new: str) -> None:
     """Rename worksheet *old* to *new*.
+
+    Any tables that live on *old* are updated to point at *new* — they stay
+    readable under their same names, just on the renamed sheet.
 
     Raises:
         SheetNameError: *new* is not a valid worksheet name.
@@ -598,6 +701,15 @@ def rename_sheet(path: str | Path, old: str, new: str) -> None:
         if new != old and new in workbook.sheetnames:
             raise ValueError(f"sheet {new!r} already exists")
         workbook[old].title = new
+
+        if old != mt.SCHEMA_SHEET and new != old:
+            schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
+            entries = mt.load_schema(workbook)
+            updated = mt.rename_sheet_in_entries(entries, old, new)
+            on_disk = entries if schema_existed else {}
+            if updated != on_disk:
+                mt.save_schema(workbook, updated)
+
         atomic_save(workbook, path)
     finally:
         workbook.close()
