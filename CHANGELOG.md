@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A column can now be restricted to a single Excel-native data type.**
+  Every column defaults to `ColumnType.ANY` (anything `check_cell_value`
+  allows) unless declared otherwise; a value that doesn't match its
+  column's type raises `ColumnTypeError` on the next `create()`/`write()`
+  — the same schedule as `CellTypeError`, not when values are set. A blank
+  cell (`None`) is always allowed regardless of a column's type.
+  - `ColumnType` (new, exported) — an enum of `ANY`, `TEXT`, `NUMBER`,
+    `BOOLEAN`, `DATE`, `TIME`, `DURATION`. Follows Excel's own type model,
+    not Python's: `NUMBER` covers both `int` and `float`, and `DATE`
+    covers both `datetime.date` and `datetime.datetime`.
+  - `Table(..., column_types={"header": ColumnType.NUMBER, ...})` — declare
+    at construction; `t.column_types` reads the current mapping (every
+    column, defaulting to `ANY`); `t.set_column_type(header, column_type)`
+    changes one afterward. `Table.from_dict(..., column_types=...)` too.
+  - Persisted per table in the reserved `_pyhandlexl_tables` schema sheet.
+    Renaming, inserting, or dropping a column moves or drops its
+    restriction along with it; a newly inserted column always starts as
+    `ANY`. Included in `Table` equality (unlike `style`, which isn't).
+  - `ColumnTypeError` (new, exported) — a `PyhandlexlError` and `TypeError`.
+  - Like a table's style, a column's type restriction can't be recovered if
+    the schema sheet is deleted and rebuilt from markers — a rebuilt table
+    always reports `ColumnType.ANY` for every column.
+
 - **A worksheet now holds either named tables or plain grid data, never
   both.** Whichever writes to a sheet first claims it: `write_sheet`/
   `append_rows` claim it as `"grid"`; `Table.create` claims it as `"table"`.

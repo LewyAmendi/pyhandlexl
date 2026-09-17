@@ -24,7 +24,8 @@ from openpyxl.utils import coordinate_to_tuple
 
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._safety import atomic_save, safe_load
-from pyhandlexl.errors import SheetKindError, SheetNotFoundError
+from pyhandlexl.column_type import ColumnType
+from pyhandlexl.errors import ColumnTypeError, SheetKindError, SheetNotFoundError
 from pyhandlexl.style import TableStyle
 from pyhandlexl.validate import check_cell_value, check_dimensions
 
@@ -55,6 +56,10 @@ class Table:
 
     Every table is visually styled — see :class:`pyhandlexl.style.TableStyle`
     — defaulting to ``TableStyle.DEFAULT`` unless ``style=`` says otherwise.
+
+    A column can be restricted to one :class:`~pyhandlexl.column_type.ColumnType`
+    — every column defaults to ``ColumnType.ANY`` (no restriction) unless
+    ``column_types=`` says otherwise.
     """
 
     def __init__(
@@ -66,6 +71,7 @@ class Table:
         column_headers: Iterable[str],
         name: str,
         style: TableStyle | None = None,
+        column_types: Mapping[str, ColumnType] | None = None,
     ) -> None:
         # A bare str is technically Iterable[str] — iterating it silently splits
         # it into one column/row per character. That's never what's meant, so
@@ -87,6 +93,24 @@ class Table:
         self._corner: str = corner
         self._name: str = name
         self._style: TableStyle = style if style is not None else TableStyle.DEFAULT
+        self._column_types: list[ColumnType] = [ColumnType.ANY] * len(self._column_headers)
+        if column_types is not None:
+            if not isinstance(column_types, Mapping):
+                raise TypeError(
+                    f"column_types must be a mapping of column header to ColumnType, "
+                    f"got {type(column_types).__name__}"
+                )
+            for header, column_type in column_types.items():
+                if not isinstance(column_type, ColumnType):
+                    raise TypeError(
+                        f"column_types[{header!r}] must be a ColumnType, "
+                        f"got {type(column_type).__name__}"
+                    )
+                try:
+                    index = self._column_headers.index(header)
+                except ValueError:
+                    raise KeyError(f"no column headed {header!r}") from None
+                self._column_types[index] = column_type
         self._validate()
 
     def _validate(self) -> None:
@@ -162,8 +186,15 @@ class Table:
             headers = [_to_label(h) for h in block[0][1:]]
             labels = [_to_label(row[0]) for row in block[1:]]
             data = [list(row[1:]) for row in block[1:]]
+            column_types = dict(zip(headers, located.column_types, strict=True))
             table = cls(
-                data, labels, corner, column_headers=headers, name=name, style=located.style
+                data,
+                labels,
+                corner,
+                column_headers=headers,
+                name=name,
+                style=located.style,
+                column_types=column_types,
             )
 
             if healed:
@@ -182,6 +213,7 @@ class Table:
         corner: str = "",
         *,
         name: str,
+        column_types: Mapping[str, ColumnType] | None = None,
     ) -> Table:
         """Build a Table from a dict of dicts: row label -> {column header: value}.
 
@@ -212,7 +244,9 @@ class Table:
                     f"row {label!r} has keys {list(row.keys())!r}, expected {headers!r}"
                 )
         data = [list(row.values()) for row in rows]
-        return cls(data, row_labels, corner, column_headers=headers, name=name)
+        return cls(
+            data, row_labels, corner, column_headers=headers, name=name, column_types=column_types
+        )
 
     # ------------------------------------------------------------ properties
 
@@ -242,6 +276,27 @@ class Table:
         if not isinstance(value, TableStyle):
             raise TypeError(f"style must be a TableStyle, got {type(value).__name__}")
         self._style = value
+
+    @property
+    def column_types(self) -> dict[str, ColumnType]:
+        """Each column header's type restriction — ``ColumnType.ANY`` (no
+        restriction) unless declared otherwise.
+
+        Change one column's restriction with :meth:`set_column_type`.
+        """
+        return dict(zip(self._column_headers, self._column_types, strict=True))
+
+    def set_column_type(self, header: str, column_type: ColumnType) -> None:
+        """Restrict *header*'s column to *column_type*.
+
+        ``ColumnType.ANY`` removes any existing restriction. Checked (along
+        with every other column's) on the next :meth:`create`/:meth:`write`
+        — ``ColumnTypeError`` if a data value already in the column doesn't
+        match; existing data isn't checked until then.
+        """
+        if not isinstance(column_type, ColumnType):
+            raise TypeError(f"column_type must be a ColumnType, got {type(column_type).__name__}")
+        self._column_types[self._column_index(header)] = column_type
 
     @property
     def data(self) -> TableData:
@@ -508,6 +563,7 @@ class Table:
         for data_row, value in zip(self._data, new_col, strict=True):
             data_row.insert(position - 1, value)
         self._column_headers.insert(position - 1, header)
+        self._column_types.insert(position - 1, ColumnType.ANY)
 
     def drop_row(self, label: str) -> None:
         """Remove the row labeled *label*."""
@@ -525,6 +581,7 @@ class Table:
         if len(self._column_headers) == 1:
             raise ValueError("cannot drop the only remaining column")
         del self._column_headers[j]
+        del self._column_types[j]
         for data_row in self._data:
             del data_row[j]
 
@@ -609,6 +666,19 @@ class Table:
             grid.append([self._row_labels[i], *data_row])
         return grid
 
+    def _check_column_types(self) -> None:
+        for j, column_type in enumerate(self._column_types):
+            if column_type is ColumnType.ANY:
+                continue
+            header = self._column_headers[j]
+            for i, row in enumerate(self._data):
+                value = row[j]
+                if not column_type.allows(value):
+                    raise ColumnTypeError(
+                        f"column {header!r} is restricted to {column_type.value} — row "
+                        f"{self._row_labels[i]!r} has {type(value).__name__} {value!r}"
+                    )
+
     def write(self, path: str | Path) -> None:
         """Write this table back to its tracked position.
 
@@ -618,7 +688,9 @@ class Table:
         sheet to make room; growing rows never shifts anything.
 
         Every data value must be a type Excel can store (``CellTypeError``
-        otherwise) — the check happens here, not when values are set.
+        otherwise), and must match any column type restriction
+        (``ColumnTypeError`` otherwise) — both checks happen here, not when
+        values are set.
         """
         workbook = safe_load(path)
         try:
@@ -631,6 +703,7 @@ class Table:
             for row in assembled:
                 for value in row:
                     check_cell_value(value)
+            self._check_column_types()
 
             new_n_rows = len(self._data)
             new_n_cols = self._width()
@@ -658,7 +731,13 @@ class Table:
             mt.write_region(ws, entry.anchor_row, entry.anchor_col, [[mt.MARKER, self._name]])
             mt.write_region(ws, entry.anchor_row + 1, entry.anchor_col, assembled)
 
-            updated_entry = replace(entry, n_rows=new_n_rows, n_cols=new_n_cols, style=self._style)
+            updated_entry = replace(
+                entry,
+                n_rows=new_n_rows,
+                n_cols=new_n_cols,
+                style=self._style,
+                column_types=self._column_types,
+            )
             entries[self._name] = updated_entry
             mt.paint_table(ws, updated_entry)
             mt.save_schema(workbook, entries)
@@ -679,6 +758,7 @@ class Table:
                 ``write_sheet``/``append_rows``), or is the reserved schema
                 sheet.
             CellTypeError: a data value is not a type Excel can store.
+            ColumnTypeError: a data value doesn't match its column's type restriction.
             DimensionError: the placed table would exceed Excel's grid limits.
         """
         workbook = safe_load(path)
@@ -699,6 +779,7 @@ class Table:
             for row in assembled:
                 for value in row:
                     check_cell_value(value)
+            self._check_column_types()
 
             anchor_row, anchor_col = mt.find_placement(entries, sheet)
             n_rows = len(self._data)
@@ -710,7 +791,14 @@ class Table:
             mt.write_region(ws, anchor_row + 1, anchor_col, assembled)
 
             entry = mt.TableEntry(
-                self._name, sheet, anchor_row, anchor_col, n_rows, n_cols, self._style
+                self._name,
+                sheet,
+                anchor_row,
+                anchor_col,
+                n_rows,
+                n_cols,
+                self._style,
+                self._column_types,
             )
             entries[self._name] = entry
             mt.paint_table(ws, entry)
@@ -729,6 +817,7 @@ class Table:
             and self._column_headers == other._column_headers
             and self._row_labels == other._row_labels
             and self._corner == other._corner
+            and self._column_types == other._column_types
         )
 
     def __repr__(self) -> str:

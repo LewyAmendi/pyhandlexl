@@ -319,13 +319,55 @@ TableStyle(
 ```
 
 Styling never touches `t.data` or equality — `t1 == t2` compares data,
-headers, labels, and corner only, however differently the two are styled.
-It has no effect on `.csv` files — there's nothing there to style.
+headers, labels, corner, and column types only, however differently the two
+are styled. It has no effect on `.csv` files — there's nothing there to style.
+
+### Restricting a column's type
+
+A column defaults to accepting any type `check_cell_value` allows — restrict
+one to a single Excel-native type instead, and a value that doesn't match
+raises `ColumnTypeError` on the next `create()`/`write()`:
+
+```python
+from pyhandlexl import Table, ColumnType
+
+t = Table(
+    data=[[1000, "Alice"]],
+    column_headers=["amount", "name"],
+    row_labels=["r1"],
+    name="Orders",
+    column_types={"amount": ColumnType.NUMBER},
+)
+t.column_types              # {'amount': ColumnType.NUMBER, 'name': ColumnType.ANY}
+t.set_column_type("name", ColumnType.TEXT)
+```
+
+`ColumnType.NUMBER`, `.TEXT`, `.BOOLEAN`, `.DATE`, `.TIME`, `.DURATION`, and
+`.ANY` (the default) follow *Excel's* type model, not Python's exactly:
+`NUMBER` covers both `int` and `float` (Excel stores every number as a
+float and doesn't distinguish them — see
+[Round-trip notes](#round-trip-notes)), and `DATE` covers both
+`datetime.date` and `datetime.datetime` (Excel has no date-only type). A
+blank cell (`None`) is always allowed regardless of a column's type — the
+restriction governs what a real value may be, not whether the cell has been
+filled in yet.
+
+Checked the same time as `CellTypeError` — a value can be a type Excel can
+store at all, and still fail this because it isn't the type *this* column
+was restricted to. Restricting a column doesn't touch data already in it
+until the next `create()`/`write()`; renaming, inserting, or dropping a
+column moves or drops its restriction along with it, and a newly inserted
+column always starts as `ColumnType.ANY`. Like style, a column's type
+restriction can't be recovered if the reserved schema sheet is deleted and
+rebuilt from markers (see
+[Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet))
+— a rebuilt table always comes back reporting `ColumnType.ANY` for every
+column.
 
 ### Equality
 
 ```python
-t1 == t2            # compares data, headers, labels, corner
+t1 == t2   # compares data, headers, labels, corner, and column types
 ```
 
 Row count and row-label membership go through `t.data` instead of `len()`/`in`,
@@ -739,6 +781,7 @@ All raised exceptions derive from `PyhandlexlError`:
 | `SheetNotFoundError` | `KeyError` | no worksheet with that name |
 | `FileLockedError` | `OSError` | file stayed locked through every retry |
 | `CellTypeError` | `TypeError` | a value is not a type Excel can store |
+| `ColumnTypeError` | `TypeError` | a value doesn't match its column's `ColumnType` restriction |
 | `TableNotFoundError` | `KeyError` | no named table with that name, or its marker is gone |
 | `TableExistsError` | `ValueError` | a named table with that name already exists |
 | `SheetKindError` | `ValueError` | the sheet already holds the other kind of data (table vs. grid), or is the reserved schema sheet |

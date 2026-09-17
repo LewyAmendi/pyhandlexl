@@ -6,6 +6,7 @@ import pytest
 from openpyxl import load_workbook
 
 from pyhandlexl import (
+    ColumnType,
     SchemaRebuiltWarning,
     Table,
     TableNotFoundError,
@@ -240,6 +241,25 @@ class TestRebuildStyle:
             t = Table.read(data_sheet, "T")
         assert t.style.band_fill == ""
         assert TableStyle.DEFAULT.band_fill != ""
+
+
+class TestRebuildColumnTypes:
+    def test_column_type_restrictions_cannot_be_recovered(self, data_sheet):
+        # a known, inherent limit: nothing in a cell says "this column is
+        # restricted," only what happens to already be in it, so a rebuild
+        # always reports ColumnType.ANY for every column, even though this
+        # table was originally restricted.
+        Table(
+            data=[[1]],
+            column_headers=["a"],
+            row_labels=["x"],
+            name="T",
+            column_types={"a": ColumnType.NUMBER},
+        ).create(data_sheet, sheet="Data")
+        _delete_schema_sheet(data_sheet)
+        with pytest.warns(SchemaRebuiltWarning):
+            t = Table.read(data_sheet, "T")
+        assert t.column_types == {"a": ColumnType.ANY}
 
 
 class TestRebuildConflicts:
