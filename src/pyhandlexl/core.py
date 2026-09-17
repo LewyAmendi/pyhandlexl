@@ -13,8 +13,10 @@ from typing import Literal
 from openpyxl import Workbook
 
 from pyhandlexl import _multi_table as mt
+from pyhandlexl._multi_table import _to_label
 from pyhandlexl._safety import atomic_save, safe_delete, safe_load
 from pyhandlexl.errors import SheetKindError, SheetNotFoundError
+from pyhandlexl.table import TableInfo
 from pyhandlexl.validate import check_cell_value, check_dimensions, check_sheet_name
 
 Orientation = Literal["rows", "columns"]
@@ -595,6 +597,57 @@ def clear_all_sheet_data(path: str | Path, sheet: str) -> None:
         workbook.remove(workbook[sheet])
         workbook.create_sheet(title=sheet, index=index)
         atomic_save(workbook, path)
+    finally:
+        workbook.close()
+
+
+def table_info(path: str | Path, name: str) -> TableInfo:
+    """Metadata for the named table, without reading its actual row data.
+
+    Cheaper than ``Table.read(path, name).info`` when all you need is size,
+    dates, sheet, style, or column types — this reads the table's header
+    row (to pair each :class:`~pyhandlexl.column_type.ColumnType` with its
+    column name), but never its row labels or data.
+
+    ``created_at``/``modified_at`` are ``None`` if the table's schema entry
+    was recovered by an automatic rebuild — see
+    :class:`~pyhandlexl.errors.SchemaRebuiltWarning`.
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        TableNotFoundError: no such table exists, or its marker cannot be
+            found on its recorded sheet.
+    """
+    workbook = safe_load(path)
+    try:
+        schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
+        entries = mt.load_schema(workbook)
+        entry = mt.get_entry(entries, name)
+        located = mt.verify_or_locate(workbook, entry)
+        healed = located != entry
+
+        ws = workbook[located.sheet]
+        header_row = mt.read_region(
+            ws, located.anchor_row + 1, located.anchor_col + 1, 1, located.n_cols
+        )
+        headers = [_to_label(h) for h in header_row[0]]
+        column_types = dict(zip(headers, located.column_types, strict=True))
+
+        if healed:
+            entries[name] = located
+        if healed or not schema_existed:
+            mt.save_schema(workbook, entries)
+            atomic_save(workbook, path)
+
+        return TableInfo(
+            created_at=located.created_at,
+            modified_at=located.modified_at,
+            n_rows=located.n_rows,
+            n_cols=located.n_cols,
+            sheet=located.sheet,
+            style=located.style,
+            column_types=column_types,
+        )
     finally:
         workbook.close()
 

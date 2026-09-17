@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A table now tracks its own creation/modification times, size, and
+  sheet — accessible via `t.info` and the new standalone `table_info`.**
+  - `t.info` (new property) — a `TableInfo` snapshot: `created_at`,
+    `modified_at` (both UTC `datetime`, set by `create()`/`write()`
+    respectively), `n_rows`, `n_cols`, `sheet`, plus `style` and
+    `column_types` cross-referenced from the existing properties of the
+    same name. `sheet`/`created_at`/`modified_at` are `None` until the
+    table has actually been placed with `create()` (or loaded with
+    `read()`).
+  - `table_info(path, name)` (new, exported) — the same `TableInfo`
+    without constructing a `Table` or reading its row data; useful for
+    cheaply checking size/dates/sheet across many tables.
+  - `TableInfo` (new, exported) — the frozen dataclass both return.
+  - `modified_at` reflects only a table's *own* `create()`/`write()` —
+    being shifted right to make room for a growing neighbor doesn't count,
+    since the table's own data didn't change.
+  - Persisted per table in the reserved schema sheet, alongside style and
+    column types — and subject to the same rebuild limitation: if that
+    sheet is deleted and reconstructed from markers, there's nothing in a
+    cell recording either time, so a rebuilt table reports both as `None`
+    rather than a guessed value. Size and sheet still come back exact.
+
 ## [0.9.2] — 2026-09-17
 
 ### Added

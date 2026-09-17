@@ -19,6 +19,7 @@ from pyhandlexl.core import (
     rename_sheet,
     sheet_exists,
     sheet_kind,
+    table_info,
     write_sheet,
 )
 from pyhandlexl.errors import (
@@ -36,7 +37,7 @@ from pyhandlexl.errors import (
     TableNotFoundError,
 )
 from pyhandlexl.style import TableStyle
-from pyhandlexl.table import Table, TableData
+from pyhandlexl.table import Table, TableData, TableInfo
 from pyhandlexl.validate import (
     check_cell_value,
     check_dimensions,
@@ -61,6 +62,7 @@ __all__ = [
     "Table",
     "TableData",
     "TableExistsError",
+    "TableInfo",
     "TableNotFoundError",
     "TableStyle",
     "append_rows",
@@ -84,5 +86,6 @@ __all__ = [
     "rename_sheet",
     "sheet_exists",
     "sheet_kind",
+    "table_info",
     "write_sheet",
 ]

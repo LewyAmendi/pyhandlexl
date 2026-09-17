@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import warnings
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime
 
 from openpyxl.comments import Comment
 from openpyxl.styles import Border, Font, PatternFill, Side
@@ -35,13 +36,14 @@ MARKER = "TABLE NAME"
 _SCHEMA_TAB_COLOR = "FF0000"
 _SCHEMA_WARNING = (
     "pyhandlexl-managed — do not edit or delete by hand.\n\n"
-    "This sheet tracks every named table's location, size, style, and "
-    "column-type restrictions. If it's deleted, pyhandlexl automatically "
-    "rebuilds it next time a table is read, written, or listed, by "
-    "scanning the workbook for table markers — position and size come "
-    "back exact, but style is only a best-effort reconstruction, and "
-    "column-type restrictions cannot be recovered at all (every column "
-    "comes back unrestricted)."
+    "This sheet tracks every named table's location, size, style, "
+    "column-type restrictions, and creation/modification times. If it's "
+    "deleted, pyhandlexl automatically rebuilds it next time a table is "
+    "read, written, or listed, by scanning the workbook for table markers "
+    "— position and size come back exact, but style is only a best-effort "
+    "reconstruction, and column-type restrictions and the creation/"
+    "modification times cannot be recovered at all (every column comes "
+    "back unrestricted, and both times come back unknown)."
 )
 _SCHEMA_HEADER = (
     "name",
@@ -52,7 +54,14 @@ _SCHEMA_HEADER = (
     "n_cols",
     "style",
     "column_types",
+    "created_at",
+    "modified_at",
 )
+
+
+def _to_label(value: object) -> str:
+    """Coerce a header/label/corner cell to ``str``; an empty cell becomes ``""``."""
+    return "" if value is None else str(value)
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,8 @@ class TableEntry:
     n_cols: int  # data columns (not counting the label column)
     style: TableStyle
     column_types: list[ColumnType]  # one per data column, in order
+    created_at: datetime | None  # None only if recovered by rebuild_schema
+    modified_at: datetime | None  # None only if recovered by rebuild_schema
 
     @property
     def height(self) -> int:
@@ -95,6 +106,14 @@ def _column_types_from_json(value: str) -> list[ColumnType]:
     return [ColumnType(v) for v in json.loads(value)]
 
 
+def _datetime_to_str(value: datetime | None) -> str:
+    return value.isoformat() if value is not None else ""
+
+
+def _datetime_from_str(value: str) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
+
+
 # ---------------------------------------------------------------- the schema
 
 
@@ -114,7 +133,18 @@ def load_schema(workbook) -> dict[str, TableEntry]:
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row or row[0] is None:
             continue
-        name, sheet, anchor_row, anchor_col, n_rows, n_cols, style_json, column_types_json = row[:8]
+        (
+            name,
+            sheet,
+            anchor_row,
+            anchor_col,
+            n_rows,
+            n_cols,
+            style_json,
+            column_types_json,
+            created_at,
+            modified_at,
+        ) = row[:10]
         entries[name] = TableEntry(
             name,
             sheet,
@@ -124,6 +154,8 @@ def load_schema(workbook) -> dict[str, TableEntry]:
             int(n_cols),
             _style_from_json(style_json),
             _column_types_from_json(column_types_json),
+            _datetime_from_str(created_at),
+            _datetime_from_str(modified_at),
         )
     return entries
 
@@ -154,6 +186,8 @@ def save_schema(workbook, entries: dict[str, TableEntry]) -> None:
                 e.n_cols,
                 _style_to_json(e.style),
                 _column_types_to_json(e.column_types),
+                _datetime_to_str(e.created_at),
+                _datetime_to_str(e.modified_at),
             ]
         )
 
@@ -314,7 +348,9 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
     back from its cells at all — there's nothing in a cell that says "this
     column is restricted," only what happens to already be in it — so every
     rebuilt table comes back with every column reporting ``ColumnType.ANY``,
-    even if it was originally restricted.
+    even if it was originally restricted. Likewise, nothing in a cell
+    records when the table was created or last modified, so both come back
+    ``None`` rather than a guessed value.
 
     A name claimed by more than one marker can't be safely resolved — that
     table is left out of the result (a warning names it) rather than
@@ -355,7 +391,16 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
             style = _infer_style(ws, anchor_row, anchor_col, n_rows, n_cols)
             column_types = [ColumnType.ANY] * n_cols
             entries[name] = TableEntry(
-                name, sheet_name, anchor_row, anchor_col, n_rows, n_cols, style, column_types
+                name,
+                sheet_name,
+                anchor_row,
+                anchor_col,
+                n_rows,
+                n_cols,
+                style,
+                column_types,
+                created_at=None,
+                modified_at=None,
             )
 
     warnings.warn(
@@ -363,7 +408,8 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
         f"the workbook; found {len(entries)} table(s): {sorted(entries)}. Sizes are "
         "exact; styles are a best-effort reconstruction from the cells themselves and "
         "may not exactly match what was originally set; column type restrictions can't "
-        "be recovered at all and come back as ColumnType.ANY for every column.",
+        "be recovered at all and come back as ColumnType.ANY for every column; creation "
+        "and modification times can't be recovered either and come back as None.",
         SchemaRebuiltWarning,
         stacklevel=3,
     )

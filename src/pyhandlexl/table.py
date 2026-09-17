@@ -18,21 +18,18 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 from openpyxl.utils import coordinate_to_tuple
 
 from pyhandlexl import _multi_table as mt
+from pyhandlexl._multi_table import _to_label
 from pyhandlexl._safety import atomic_save, safe_load
 from pyhandlexl.column_type import ColumnType
 from pyhandlexl.errors import ColumnTypeError, SheetKindError, SheetNotFoundError
 from pyhandlexl.style import TableStyle
 from pyhandlexl.validate import check_cell_value, check_dimensions
-
-
-def _to_label(value: object) -> str:
-    """Coerce a header/label/corner cell to ``str``; an empty cell becomes ``""``."""
-    return "" if value is None else str(value)
 
 
 @dataclass(frozen=True)
@@ -44,6 +41,33 @@ class TableData:
     row_labels: list[str]
     column_headers: list[str]
     corner: str
+
+
+@dataclass(frozen=True)
+class TableInfo:
+    """A read-only snapshot of a Table's metadata — not its data.
+
+    ``sheet``, ``created_at``, and ``modified_at`` are ``None`` until the
+    table has been placed with :meth:`Table.create` (or loaded with
+    :meth:`Table.read`) — a freshly built, not-yet-placed ``Table`` has no
+    sheet or history yet. ``created_at``/``modified_at`` are also ``None``
+    for a table recovered by an automatic schema rebuild (see
+    :class:`~pyhandlexl.errors.SchemaRebuiltWarning`) — a rebuild has no way
+    to know either time, so it reports them as unknown rather than guessing.
+
+    ``modified_at`` only reflects this table's *own* ``create()``/``write()``
+    calls — a table shifted right to make room for a growing neighbour (see
+    "Multiple named tables on one sheet" in the README) is not itself
+    modified, so its ``modified_at`` is unaffected by that.
+    """
+
+    created_at: datetime | None
+    modified_at: datetime | None
+    n_rows: int
+    n_cols: int
+    sheet: str | None
+    style: TableStyle
+    column_types: dict[str, ColumnType]
 
 
 class Table:
@@ -111,6 +135,11 @@ class Table:
                 except ValueError:
                     raise KeyError(f"no column headed {header!r}") from None
                 self._column_types[index] = column_type
+        # Set only by create()/read()/write() — a freshly built Table has no
+        # sheet or history until it's actually placed somewhere.
+        self._sheet: str | None = None
+        self._created_at: datetime | None = None
+        self._modified_at: datetime | None = None
         self._validate()
 
     def _validate(self) -> None:
@@ -196,6 +225,9 @@ class Table:
                 style=located.style,
                 column_types=column_types,
             )
+            table._sheet = located.sheet
+            table._created_at = located.created_at
+            table._modified_at = located.modified_at
 
             if healed:
                 entries[name] = located
@@ -297,6 +329,19 @@ class Table:
         if not isinstance(column_type, ColumnType):
             raise TypeError(f"column_type must be a ColumnType, got {type(column_type).__name__}")
         self._column_types[self._column_index(header)] = column_type
+
+    @property
+    def info(self) -> TableInfo:
+        """A read-only snapshot of this table's metadata — see :class:`TableInfo`."""
+        return TableInfo(
+            created_at=self._created_at,
+            modified_at=self._modified_at,
+            n_rows=len(self._data),
+            n_cols=self._width(),
+            sheet=self._sheet,
+            style=self._style,
+            column_types=self.column_types,
+        )
 
     @property
     def data(self) -> TableData:
@@ -698,6 +743,8 @@ class Table:
             entry = mt.get_entry(entries, self._name)
             entry = mt.verify_or_locate(workbook, entry)
             entries[self._name] = entry
+            self._sheet = entry.sheet
+            self._created_at = entry.created_at
 
             assembled = self._assemble()
             for row in assembled:
@@ -705,6 +752,7 @@ class Table:
                     check_cell_value(value)
             self._check_column_types()
 
+            now = datetime.now(timezone.utc)
             new_n_rows = len(self._data)
             new_n_cols = self._width()
 
@@ -737,11 +785,13 @@ class Table:
                 n_cols=new_n_cols,
                 style=self._style,
                 column_types=self._column_types,
+                modified_at=now,
             )
             entries[self._name] = updated_entry
             mt.paint_table(ws, updated_entry)
             mt.save_schema(workbook, entries)
             atomic_save(workbook, path)
+            self._modified_at = now
         finally:
             workbook.close()
 
@@ -790,6 +840,7 @@ class Table:
             mt.write_region(ws, anchor_row, anchor_col, [[mt.MARKER, self._name]])
             mt.write_region(ws, anchor_row + 1, anchor_col, assembled)
 
+            now = datetime.now(timezone.utc)
             entry = mt.TableEntry(
                 self._name,
                 sheet,
@@ -799,11 +850,16 @@ class Table:
                 n_cols,
                 self._style,
                 self._column_types,
+                created_at=now,
+                modified_at=now,
             )
             entries[self._name] = entry
             mt.paint_table(ws, entry)
             mt.save_schema(workbook, entries)
             atomic_save(workbook, path)
+            self._sheet = sheet
+            self._created_at = now
+            self._modified_at = now
         finally:
             workbook.close()
 
