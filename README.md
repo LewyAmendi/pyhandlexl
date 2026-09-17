@@ -364,6 +364,48 @@ rebuilt from markers (see
 — a rebuilt table always comes back reporting `ColumnType.ANY` for every
 column.
 
+### Table metadata
+
+```python
+t.info   # a TableInfo snapshot — not data, not style: when, where, how big
+```
+
+```python
+i = t.info
+i.created_at       # when create() first placed it (UTC datetime, or None)
+i.modified_at      # when write()/create() last touched it (UTC, or None)
+i.n_rows           # data row count
+i.n_cols           # data column count
+i.sheet            # which worksheet it's on (str, or None)
+i.style            # same object as t.style
+i.column_types     # same mapping as t.column_types
+```
+
+`sheet`, `created_at`, and `modified_at` are `None` until the table has
+actually been placed with `create()` (or loaded with `read()`) — a table
+you're still building up in memory has no sheet or history yet.
+`modified_at` only reflects *this* table's own `create()`/`write()` calls —
+a table shifted right to make room for a growing neighbour (see
+[Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet))
+is not itself modified, so its `modified_at` is untouched by that.
+
+For checking a table's metadata without reading (and type-converting) its
+actual row data — say, listing every table's size and dates in a workbook
+— there's a standalone lookup that skips all of that:
+
+```python
+from pyhandlexl import table_info
+
+table_info(path, "Sales")   # same TableInfo, without an existing Table object
+```
+
+Both are persisted in the reserved schema sheet, and both are subject to
+the same rebuild limitation as style and column types: if that sheet is
+deleted and reconstructed from markers, there's nothing in a cell that
+records when a table was created or last modified, so a rebuilt table
+reports `created_at`/`modified_at` as `None` rather than a guessed time —
+size and sheet still come back exact, same as always.
+
 ### Equality
 
 ```python
@@ -403,6 +445,8 @@ sales.write("shop.xlsx")                          # Inventory shifts right autom
 ```
 
 - **`list_tables(path)`** — every named table in the workbook, across all sheets.
+- **`table_info(path, name)`** — a table's [metadata](#table-metadata) (dates,
+  size, sheet, style, column types) without reading its row data.
 - **`delete_table(path, name)`** — removes a named table; `TableNotFoundError`
   if it doesn't exist. Leaves the space empty — other tables on the sheet are
   not shifted to close the gap, and the name is free to reuse afterwards.
@@ -451,10 +495,13 @@ row to compare against), so it always comes back reporting no banding even
 if it originally had some. Its **column-type restrictions cannot be
 recovered at all** — see
 [Restricting a column's type](#restricting-a-columns-type) — every column
-comes back as `ColumnType.ANY`. Two markers found claiming the same name
-can't be safely resolved either — that table is left out of the rebuilt
-schema (named in the warning) rather than guessing which one is real;
-every unambiguous table is unaffected.
+comes back as `ColumnType.ANY`. Its **creation and modification times
+cannot be recovered either** — see [Table metadata](#table-metadata) —
+`t.info.created_at`/`.modified_at` both come back `None` rather than a
+guessed time. Two markers found claiming the same name can't be safely
+resolved either — that table is left out of the rebuilt schema (named in
+the warning) rather than guessing which one is real; every unambiguous
+table is unaffected.
 
 ### One kind of data per sheet
 
