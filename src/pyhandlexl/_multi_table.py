@@ -23,14 +23,36 @@ import json
 import warnings
 from dataclasses import asdict, dataclass, replace
 
+from openpyxl.comments import Comment
 from openpyxl.styles import Border, Font, PatternFill, Side
 
+from pyhandlexl.column_type import ColumnType
 from pyhandlexl.errors import SchemaRebuiltWarning, TableExistsError, TableNotFoundError
 from pyhandlexl.style import TableStyle
 
 SCHEMA_SHEET = "_pyhandlexl_tables"
 MARKER = "TABLE NAME"
-_SCHEMA_HEADER = ("name", "sheet", "anchor_row", "anchor_col", "n_rows", "n_cols", "style")
+_SCHEMA_TAB_COLOR = "FF0000"
+_SCHEMA_WARNING = (
+    "pyhandlexl-managed — do not edit or delete by hand.\n\n"
+    "This sheet tracks every named table's location, size, style, and "
+    "column-type restrictions. If it's deleted, pyhandlexl automatically "
+    "rebuilds it next time a table is read, written, or listed, by "
+    "scanning the workbook for table markers — position and size come "
+    "back exact, but style is only a best-effort reconstruction, and "
+    "column-type restrictions cannot be recovered at all (every column "
+    "comes back unrestricted)."
+)
+_SCHEMA_HEADER = (
+    "name",
+    "sheet",
+    "anchor_row",
+    "anchor_col",
+    "n_rows",
+    "n_cols",
+    "style",
+    "column_types",
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +66,7 @@ class TableEntry:
     n_rows: int  # data rows (not counting the marker or header row)
     n_cols: int  # data columns (not counting the label column)
     style: TableStyle
+    column_types: list[ColumnType]  # one per data column, in order
 
     @property
     def height(self) -> int:
@@ -62,6 +85,14 @@ def _style_to_json(style: TableStyle) -> str:
 
 def _style_from_json(value: str) -> TableStyle:
     return TableStyle(**json.loads(value))
+
+
+def _column_types_to_json(column_types: list[ColumnType]) -> str:
+    return json.dumps([ct.value for ct in column_types], separators=(",", ":"))
+
+
+def _column_types_from_json(value: str) -> list[ColumnType]:
+    return [ColumnType(v) for v in json.loads(value)]
 
 
 # ---------------------------------------------------------------- the schema
@@ -83,7 +114,7 @@ def load_schema(workbook) -> dict[str, TableEntry]:
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row or row[0] is None:
             continue
-        name, sheet, anchor_row, anchor_col, n_rows, n_cols, style_json = row[:7]
+        name, sheet, anchor_row, anchor_col, n_rows, n_cols, style_json, column_types_json = row[:8]
         entries[name] = TableEntry(
             name,
             sheet,
@@ -92,18 +123,26 @@ def load_schema(workbook) -> dict[str, TableEntry]:
             int(n_rows),
             int(n_cols),
             _style_from_json(style_json),
+            _column_types_from_json(column_types_json),
         )
     return entries
 
 
 def save_schema(workbook, entries: dict[str, TableEntry]) -> None:
-    """Replace the schema sheet's contents in an open workbook."""
+    """Replace the schema sheet's contents in an open workbook.
+
+    Marks the sheet with a red tab color and a warning comment on its
+    first cell every time — a visible "don't touch this" for anyone
+    browsing the workbook by hand, not just a mention in the docs.
+    """
     if SCHEMA_SHEET in workbook.sheetnames:
         ws = workbook[SCHEMA_SHEET]
         ws.delete_rows(1, ws.max_row)
     else:
         ws = workbook.create_sheet(SCHEMA_SHEET)
+    ws.sheet_properties.tabColor = _SCHEMA_TAB_COLOR
     ws.append(list(_SCHEMA_HEADER))
+    ws["A1"].comment = Comment(_SCHEMA_WARNING, "pyhandlexl")
     for e in entries.values():
         ws.append(
             [
@@ -114,6 +153,7 @@ def save_schema(workbook, entries: dict[str, TableEntry]) -> None:
                 e.n_rows,
                 e.n_cols,
                 _style_to_json(e.style),
+                _column_types_to_json(e.column_types),
             ]
         )
 
@@ -269,7 +309,12 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
     missing. Geometry is exact — see :func:`_infer_width`/:func:`_infer_height`
     for why the marker-based scan can pin it down precisely. A table's style
     is read back from its cells on a best-effort basis (see
-    :class:`~pyhandlexl.errors.SchemaRebuiltWarning`).
+    :class:`~pyhandlexl.errors.SchemaRebuiltWarning`). A column's
+    :class:`~pyhandlexl.column_type.ColumnType` restriction can't be read
+    back from its cells at all — there's nothing in a cell that says "this
+    column is restricted," only what happens to already be in it — so every
+    rebuilt table comes back with every column reporting ``ColumnType.ANY``,
+    even if it was originally restricted.
 
     A name claimed by more than one marker can't be safely resolved — that
     table is left out of the result (a warning names it) rather than
@@ -308,15 +353,17 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
             n_cols = _infer_width(ws, anchor_row, anchor_col, next_col)
             n_rows = _infer_height(ws, anchor_row, anchor_col, n_cols)
             style = _infer_style(ws, anchor_row, anchor_col, n_rows, n_cols)
+            column_types = [ColumnType.ANY] * n_cols
             entries[name] = TableEntry(
-                name, sheet_name, anchor_row, anchor_col, n_rows, n_cols, style
+                name, sheet_name, anchor_row, anchor_col, n_rows, n_cols, style, column_types
             )
 
     warnings.warn(
         f"the {SCHEMA_SHEET} schema sheet was missing and has been rebuilt by scanning "
         f"the workbook; found {len(entries)} table(s): {sorted(entries)}. Sizes are "
         "exact; styles are a best-effort reconstruction from the cells themselves and "
-        "may not exactly match what was originally set.",
+        "may not exactly match what was originally set; column type restrictions can't "
+        "be recovered at all and come back as ColumnType.ANY for every column.",
         SchemaRebuiltWarning,
         stacklevel=3,
     )

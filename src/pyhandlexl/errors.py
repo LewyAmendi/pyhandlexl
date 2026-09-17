@@ -32,6 +32,17 @@ class CellTypeError(PyhandlexlError, TypeError):
     """A cell value is not a type Excel can store."""
 
 
+class ColumnTypeError(PyhandlexlError, TypeError):
+    """A data value doesn't match its column's declared :class:`~pyhandlexl.column_type.ColumnType`.
+
+    Raised by ``Table.write``/``Table.create``, the same time as
+    ``CellTypeError`` — a value can pass ``CellTypeError`` (it's a type
+    Excel can store at all) and still fail this (it isn't the type this
+    particular column was restricted to). ``None`` never triggers this,
+    regardless of the column's restriction.
+    """
+
+
 class TableNotFoundError(PyhandlexlError, KeyError):
     """No named table with this name exists, or its marker cannot be found."""
 

@@ -1,6 +1,7 @@
 """pyhandlexl — read and write Excel .xlsx worksheets as organised, labelled tables."""
 
 from pyhandlexl import grid
+from pyhandlexl.column_type import ColumnType
 from pyhandlexl.core import (
     append_rows,
     clear_all_sheet_data,
@@ -22,6 +23,7 @@ from pyhandlexl.core import (
 )
 from pyhandlexl.errors import (
     CellTypeError,
+    ColumnTypeError,
     DimensionError,
     FileLockedError,
     InvalidFileError,
@@ -46,6 +48,8 @@ __version__ = "0.9.1"
 
 __all__ = [
     "CellTypeError",
+    "ColumnType",
+    "ColumnTypeError",
     "DimensionError",
     "FileLockedError",
     "InvalidFileError",
