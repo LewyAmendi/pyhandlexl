@@ -658,23 +658,27 @@ def delete_sheet(path: str | Path, name: str) -> None:
     Raises:
         FileNotFoundError: no file at *path*.
         SheetNotFoundError: no worksheet called *name*.
+        SheetKindError: *name* is the reserved schema sheet — deleting it
+            directly is refused; it's only ever meant to disappear as a
+            side effect of deleting every table that lives on it.
         ValueError: *name* is the only worksheet (a workbook needs at least one).
     """
     workbook = safe_load(path)
     try:
+        if name == mt.SCHEMA_SHEET:
+            raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and cannot be deleted")
         if name not in workbook.sheetnames:
             raise SheetNotFoundError(name)
         if len(workbook.sheetnames) == 1:
             raise ValueError("cannot delete the only sheet in the workbook")
         del workbook[name]
 
-        if name != mt.SCHEMA_SHEET:
-            schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
-            entries = mt.load_schema(workbook)
-            remaining = mt.drop_sheet_from_entries(entries, name)
-            on_disk = entries if schema_existed else {}
-            if remaining != on_disk:
-                mt.save_schema(workbook, remaining)
+        schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
+        entries = mt.load_schema(workbook)
+        remaining = mt.drop_sheet_from_entries(entries, name)
+        on_disk = entries if schema_existed else {}
+        if remaining != on_disk:
+            mt.save_schema(workbook, remaining)
 
         atomic_save(workbook, path)
     finally:

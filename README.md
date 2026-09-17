@@ -476,7 +476,10 @@ sheet_kind(path, "Data")   # "empty", "grid", or "table"
   `write_sheet`/`append_rows` refuse a `"table"` sheet, and `Table.create`
   refuses a `"grid"` sheet. The reserved `_pyhandlexl_tables` schema sheet
   can't be targeted directly by any of them either, or by `sheet_kind`
-  itself — it isn't a sheet with a kind of its own.
+  itself — it isn't a sheet with a kind of its own. Neither can
+  `delete_sheet` — deleting it directly is refused (`SheetKindError`); it's
+  only ever meant to disappear as a side effect of deleting every table
+  that lives on it.
 - **`clear_all_sheet_data(path, sheet)`** wipes a sheet's cells, styles, and
   any tables tracked on it, back to `"empty"` — the one way to reverse a
   claim and let the sheet be reused as the other kind.
@@ -732,7 +735,7 @@ from pyhandlexl import (
 list_sheets(path)                 # ['Sheet', 'Data']
 sheet_exists(path, "Data")        # True
 create_sheet(path, "Results")     # ValueError if it already exists
-delete_sheet(path, "Old")         # refuses to delete the last sheet; forgets its tables too
+delete_sheet(path, "Old")         # refuses to delete the last sheet, or the schema sheet; forgets its tables too
 rename_sheet(path, "Old", "New")  # moves its tables' tracked location along with it
 list_tables(path)                 # every named table in the workbook (all sheets)
 sheet_kind(path, "Data")          # "empty", "grid", or "table" — see below

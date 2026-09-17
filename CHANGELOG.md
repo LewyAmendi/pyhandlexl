@@ -35,7 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — a red sheet tab and a warning comment on its first cell, written every
   time the schema is saved (including right after a rebuild) — so it reads
   as "don't touch this" to anyone opening the workbook by hand, not just to
-  someone who's read the docs.
+  someone who's read the docs. `delete_sheet` now backs that up: deleting
+  the schema sheet directly is refused (`SheetKindError`) rather than
+  silently allowed — it's only ever meant to disappear as a side effect of
+  deleting every table that lives on it, not as a direct target.
 
 - **A worksheet now holds either named tables or plain grid data, never
   both.** Whichever writes to a sheet first claims it: `write_sheet`/

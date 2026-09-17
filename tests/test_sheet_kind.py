@@ -118,6 +118,20 @@ class TestSchemaSheetIsReserved:
         with pytest.raises(SheetKindError):
             clear_all_sheet_data(book, SCHEMA_SHEET)
 
+    def test_delete_sheet_on_schema_sheet_raises(self, book):
+        create_sheet(book, "Data")
+        _sales().create(book, sheet="Data")
+        with pytest.raises(SheetKindError):
+            delete_sheet(book, SCHEMA_SHEET)
+        assert SCHEMA_SHEET in list(load_workbook(book).sheetnames)
+
+    def test_delete_sheet_on_schema_sheet_raises_even_with_no_tables(self, book):
+        # reserved and blocked outright, regardless of whether it currently
+        # exists — same precedent as write_sheet/Table.create/
+        # clear_all_sheet_data checking the reserved name before existence.
+        with pytest.raises(SheetKindError):
+            delete_sheet(book, SCHEMA_SHEET)
+
 
 class TestClearAllSheetData:
     def test_unknown_sheet_raises(self, book):
