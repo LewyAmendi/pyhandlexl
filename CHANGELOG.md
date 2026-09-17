@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-09-17
+
 ### Added
 - **A table now tracks its own creation/modification times, size, and
   sheet — accessible via `t.info` and the new standalone `table_info`.**
@@ -431,7 +433,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.8.0...v0.9.0
