@@ -319,13 +319,55 @@ TableStyle(
 ```
 
 Styling never touches `t.data` or equality — `t1 == t2` compares data,
-headers, labels, and corner only, however differently the two are styled.
-It has no effect on `.csv` files — there's nothing there to style.
+headers, labels, corner, and column types only, however differently the two
+are styled. It has no effect on `.csv` files — there's nothing there to style.
+
+### Restricting a column's type
+
+A column defaults to accepting any type `check_cell_value` allows — restrict
+one to a single Excel-native type instead, and a value that doesn't match
+raises `ColumnTypeError` on the next `create()`/`write()`:
+
+```python
+from pyhandlexl import Table, ColumnType
+
+t = Table(
+    data=[[1000, "Alice"]],
+    column_headers=["amount", "name"],
+    row_labels=["r1"],
+    name="Orders",
+    column_types={"amount": ColumnType.NUMBER},
+)
+t.column_types              # {'amount': ColumnType.NUMBER, 'name': ColumnType.ANY}
+t.set_column_type("name", ColumnType.TEXT)
+```
+
+`ColumnType.NUMBER`, `.TEXT`, `.BOOLEAN`, `.DATE`, `.TIME`, `.DURATION`, and
+`.ANY` (the default) follow *Excel's* type model, not Python's exactly:
+`NUMBER` covers both `int` and `float` (Excel stores every number as a
+float and doesn't distinguish them — see
+[Round-trip notes](#round-trip-notes)), and `DATE` covers both
+`datetime.date` and `datetime.datetime` (Excel has no date-only type). A
+blank cell (`None`) is always allowed regardless of a column's type — the
+restriction governs what a real value may be, not whether the cell has been
+filled in yet.
+
+Checked the same time as `CellTypeError` — a value can be a type Excel can
+store at all, and still fail this because it isn't the type *this* column
+was restricted to. Restricting a column doesn't touch data already in it
+until the next `create()`/`write()`; renaming, inserting, or dropping a
+column moves or drops its restriction along with it, and a newly inserted
+column always starts as `ColumnType.ANY`. Like style, a column's type
+restriction can't be recovered if the reserved schema sheet is deleted and
+rebuilt from markers (see
+[Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet))
+— a rebuilt table always comes back reporting `ColumnType.ANY` for every
+column.
 
 ### Equality
 
 ```python
-t1 == t2            # compares data, headers, labels, corner
+t1 == t2   # compares data, headers, labels, corner, and column types
 ```
 
 Row count and row-label membership go through `t.data` instead of `len()`/`in`,
@@ -389,24 +431,30 @@ rather than guessing further.
 
 The tracking data itself lives in a reserved worksheet, `_pyhandlexl_tables`
 — `list_sheets()` never shows it, since it isn't a sheet you created or can
-write to. Leave it alone.
+write to. Leave it alone: it's marked with a red sheet tab and a warning
+comment on its first cell, every time it's written, so it's hard to miss
+even for someone opening the workbook by hand without having read this.
 
 **If that reserved sheet is deleted entirely**, self-heal can't help — it
 only relocates a table it already has a schema entry for. Instead,
 `Table.read`, `Table.write`, `delete_table`, and `list_tables` all
 automatically rebuild the whole schema by scanning every sheet for
 `"TABLE NAME"` markers the moment they find it missing, emitting a
-`SchemaRebuiltWarning` and persisting the reconstruction so the scan isn't
-repeated next time. A table's position and size come back exact — markers
-bound each other directly, and there's nowhere legitimate for real content
-to sit past a table's true edge. Its **style is a best-effort
-reconstruction** read back from the cells themselves, and can be
-imperfect: a table with exactly one data row, for instance, can never have
-its row-banding detected (there's no second row to compare against), so it
-always comes back reporting no banding even if it originally had some. Two
-markers found claiming the same name can't be safely resolved either — that
-table is left out of the rebuilt schema (named in the warning) rather than
-guessing which one is real; every unambiguous table is unaffected.
+`SchemaRebuiltWarning` and persisting the reconstruction (re-marked with the
+same tab color and comment) so the scan isn't repeated next time. A table's
+position and size come back exact — markers bound each other directly, and
+there's nowhere legitimate for real content to sit past a table's true
+edge. Its **style is a best-effort reconstruction** read back from the
+cells themselves, and can be imperfect: a table with exactly one data row,
+for instance, can never have its row-banding detected (there's no second
+row to compare against), so it always comes back reporting no banding even
+if it originally had some. Its **column-type restrictions cannot be
+recovered at all** — see
+[Restricting a column's type](#restricting-a-columns-type) — every column
+comes back as `ColumnType.ANY`. Two markers found claiming the same name
+can't be safely resolved either — that table is left out of the rebuilt
+schema (named in the warning) rather than guessing which one is real;
+every unambiguous table is unaffected.
 
 ### One kind of data per sheet
 
@@ -428,7 +476,11 @@ sheet_kind(path, "Data")   # "empty", "grid", or "table"
   `write_sheet`/`append_rows` refuse a `"table"` sheet, and `Table.create`
   refuses a `"grid"` sheet. The reserved `_pyhandlexl_tables` schema sheet
   can't be targeted directly by any of them either, or by `sheet_kind`
-  itself — it isn't a sheet with a kind of its own.
+  itself — it isn't a sheet with a kind of its own. Neither can
+  `delete_sheet` or `rename_sheet` — deleting it directly, or renaming it
+  away (or renaming some *other* sheet onto its reserved name), is refused
+  (`SheetKindError`); it's only ever meant to disappear as a side effect of
+  deleting every table that lives on it.
 - **`clear_all_sheet_data(path, sheet)`** wipes a sheet's cells, styles, and
   any tables tracked on it, back to `"empty"` — the one way to reverse a
   claim and let the sheet be reused as the other kind.
@@ -684,8 +736,8 @@ from pyhandlexl import (
 list_sheets(path)                 # ['Sheet', 'Data']
 sheet_exists(path, "Data")        # True
 create_sheet(path, "Results")     # ValueError if it already exists
-delete_sheet(path, "Old")         # refuses to delete the last sheet; forgets its tables too
-rename_sheet(path, "Old", "New")  # moves its tables' tracked location along with it
+delete_sheet(path, "Old")         # refuses to delete the last sheet, or the schema sheet; forgets its tables too
+rename_sheet(path, "Old", "New")  # moves its tables' tracked location along with it; refuses the schema sheet either way
 list_tables(path)                 # every named table in the workbook (all sheets)
 sheet_kind(path, "Data")          # "empty", "grid", or "table" — see below
 clear_all_sheet_data(path, "Data")  # wipes it back to "empty"
@@ -739,6 +791,7 @@ All raised exceptions derive from `PyhandlexlError`:
 | `SheetNotFoundError` | `KeyError` | no worksheet with that name |
 | `FileLockedError` | `OSError` | file stayed locked through every retry |
 | `CellTypeError` | `TypeError` | a value is not a type Excel can store |
+| `ColumnTypeError` | `TypeError` | a value doesn't match its column's `ColumnType` restriction |
 | `TableNotFoundError` | `KeyError` | no named table with that name, or its marker is gone |
 | `TableExistsError` | `ValueError` | a named table with that name already exists |
 | `SheetKindError` | `ValueError` | the sheet already holds the other kind of data (table vs. grid), or is the reserved schema sheet |
