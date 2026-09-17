@@ -695,18 +695,26 @@ def rename_sheet(path: str | Path, old: str, new: str) -> None:
         SheetNameError: *new* is not a valid worksheet name.
         FileNotFoundError: no file at *path*.
         SheetNotFoundError: no worksheet called *old*.
+        SheetKindError: *old* is the reserved schema sheet — renaming it
+            away would orphan it under a name pyhandlexl no longer
+            recognizes, same as deleting it — or *new* is the reserved
+            name, which would collide with (or masquerade as) it.
         ValueError: a different worksheet called *new* already exists.
     """
     check_sheet_name(new)
     workbook = safe_load(path)
     try:
+        if old == mt.SCHEMA_SHEET or new == mt.SCHEMA_SHEET:
+            raise SheetKindError(
+                f"{mt.SCHEMA_SHEET!r} is reserved and cannot be renamed to or from"
+            )
         if old not in workbook.sheetnames:
             raise SheetNotFoundError(old)
         if new != old and new in workbook.sheetnames:
             raise ValueError(f"sheet {new!r} already exists")
         workbook[old].title = new
 
-        if old != mt.SCHEMA_SHEET and new != old:
+        if new != old:
             schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
             entries = mt.load_schema(workbook)
             updated = mt.rename_sheet_in_entries(entries, old, new)

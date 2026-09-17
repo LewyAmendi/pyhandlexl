@@ -132,6 +132,21 @@ class TestSchemaSheetIsReserved:
         with pytest.raises(SheetKindError):
             delete_sheet(book, SCHEMA_SHEET)
 
+    def test_rename_sheet_away_from_schema_sheet_raises(self, book):
+        create_sheet(book, "Data")
+        _sales().create(book, sheet="Data")
+        with pytest.raises(SheetKindError):
+            rename_sheet(book, SCHEMA_SHEET, "Renamed")
+        assert SCHEMA_SHEET in list(load_workbook(book).sheetnames)
+
+    def test_rename_sheet_onto_schema_sheet_name_raises(self, book):
+        # even when _pyhandlexl_tables doesn't exist yet — otherwise this
+        # would create a bogus sheet masquerading as the real schema.
+        create_sheet(book, "Data")
+        with pytest.raises(SheetKindError):
+            rename_sheet(book, "Data", SCHEMA_SHEET)
+        assert list_sheets(book) == ["Sheet", "Data"]
+
 
 class TestClearAllSheetData:
     def test_unknown_sheet_raises(self, book):
