@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from openpyxl import load_workbook
 
 from pyhandlexl import (
     CellTypeError,
+    SchemaRebuiltWarning,
     SheetNotFoundError,
     Table,
     TableExistsError,
@@ -17,6 +19,7 @@ from pyhandlexl import (
     read_sheet,
     write_sheet,
 )
+from pyhandlexl._multi_table import SCHEMA_SHEET
 
 
 @pytest.fixture
@@ -380,3 +383,44 @@ class TestSchemaSheetIsHidden:
     def test_reserved_sheet_is_excluded_from_list_sheets(self, data_sheet):
         _sales().create(data_sheet, sheet="Data")
         assert "_pyhandlexl_tables" not in list_sheets(data_sheet)
+
+
+class TestSchemaSheetIsMarked:
+    """A visible, hard-to-miss "don't touch this" for anyone opening the
+    workbook by hand — not just a mention in the docs."""
+
+    def test_tab_is_colored(self, data_sheet):
+        _sales().create(data_sheet, sheet="Data")
+        ws = load_workbook(data_sheet)[SCHEMA_SHEET]
+        assert ws.sheet_properties.tabColor.rgb == "00FF0000"
+
+    def test_first_cell_has_a_warning_comment(self, data_sheet):
+        _sales().create(data_sheet, sheet="Data")
+        ws = load_workbook(data_sheet)[SCHEMA_SHEET]
+        comment = ws["A1"].comment
+        assert comment is not None
+        assert "do not edit or delete" in comment.text
+        assert "column-type restrictions cannot be recovered" in comment.text
+
+    def test_marking_survives_a_second_save(self, data_sheet):
+        # save_schema clears and rewrites the sheet's rows on every call —
+        # confirm the tab color/comment aren't lost in that process.
+        sales = _sales()
+        sales.create(data_sheet, sheet="Data")
+        sales.add_row("Q3", [175, 300])
+        sales.write(data_sheet)
+        ws = load_workbook(data_sheet)[SCHEMA_SHEET]
+        assert ws.sheet_properties.tabColor.rgb == "00FF0000"
+        assert ws["A1"].comment is not None
+
+    def test_marking_is_restored_after_a_rebuild(self, data_sheet):
+        _sales().create(data_sheet, sheet="Data")
+        wb = load_workbook(data_sheet)
+        del wb[SCHEMA_SHEET]
+        wb.save(data_sheet)
+
+        with pytest.warns(SchemaRebuiltWarning):
+            list_tables(data_sheet)  # triggers rebuild + persistence
+        ws = load_workbook(data_sheet)[SCHEMA_SHEET]
+        assert ws.sheet_properties.tabColor.rgb == "00FF0000"
+        assert ws["A1"].comment is not None

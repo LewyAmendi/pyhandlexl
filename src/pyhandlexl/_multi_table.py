@@ -23,6 +23,7 @@ import json
 import warnings
 from dataclasses import asdict, dataclass, replace
 
+from openpyxl.comments import Comment
 from openpyxl.styles import Border, Font, PatternFill, Side
 
 from pyhandlexl.column_type import ColumnType
@@ -31,6 +32,17 @@ from pyhandlexl.style import TableStyle
 
 SCHEMA_SHEET = "_pyhandlexl_tables"
 MARKER = "TABLE NAME"
+_SCHEMA_TAB_COLOR = "FF0000"
+_SCHEMA_WARNING = (
+    "pyhandlexl-managed — do not edit or delete by hand.\n\n"
+    "This sheet tracks every named table's location, size, style, and "
+    "column-type restrictions. If it's deleted, pyhandlexl automatically "
+    "rebuilds it next time a table is read, written, or listed, by "
+    "scanning the workbook for table markers — position and size come "
+    "back exact, but style is only a best-effort reconstruction, and "
+    "column-type restrictions cannot be recovered at all (every column "
+    "comes back unrestricted)."
+)
 _SCHEMA_HEADER = (
     "name",
     "sheet",
@@ -117,13 +129,20 @@ def load_schema(workbook) -> dict[str, TableEntry]:
 
 
 def save_schema(workbook, entries: dict[str, TableEntry]) -> None:
-    """Replace the schema sheet's contents in an open workbook."""
+    """Replace the schema sheet's contents in an open workbook.
+
+    Marks the sheet with a red tab color and a warning comment on its
+    first cell every time — a visible "don't touch this" for anyone
+    browsing the workbook by hand, not just a mention in the docs.
+    """
     if SCHEMA_SHEET in workbook.sheetnames:
         ws = workbook[SCHEMA_SHEET]
         ws.delete_rows(1, ws.max_row)
     else:
         ws = workbook.create_sheet(SCHEMA_SHEET)
+    ws.sheet_properties.tabColor = _SCHEMA_TAB_COLOR
     ws.append(list(_SCHEMA_HEADER))
+    ws["A1"].comment = Comment(_SCHEMA_WARNING, "pyhandlexl")
     for e in entries.values():
         ws.append(
             [

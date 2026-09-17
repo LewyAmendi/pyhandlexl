@@ -431,24 +431,30 @@ rather than guessing further.
 
 The tracking data itself lives in a reserved worksheet, `_pyhandlexl_tables`
 — `list_sheets()` never shows it, since it isn't a sheet you created or can
-write to. Leave it alone.
+write to. Leave it alone: it's marked with a red sheet tab and a warning
+comment on its first cell, every time it's written, so it's hard to miss
+even for someone opening the workbook by hand without having read this.
 
 **If that reserved sheet is deleted entirely**, self-heal can't help — it
 only relocates a table it already has a schema entry for. Instead,
 `Table.read`, `Table.write`, `delete_table`, and `list_tables` all
 automatically rebuild the whole schema by scanning every sheet for
 `"TABLE NAME"` markers the moment they find it missing, emitting a
-`SchemaRebuiltWarning` and persisting the reconstruction so the scan isn't
-repeated next time. A table's position and size come back exact — markers
-bound each other directly, and there's nowhere legitimate for real content
-to sit past a table's true edge. Its **style is a best-effort
-reconstruction** read back from the cells themselves, and can be
-imperfect: a table with exactly one data row, for instance, can never have
-its row-banding detected (there's no second row to compare against), so it
-always comes back reporting no banding even if it originally had some. Two
-markers found claiming the same name can't be safely resolved either — that
-table is left out of the rebuilt schema (named in the warning) rather than
-guessing which one is real; every unambiguous table is unaffected.
+`SchemaRebuiltWarning` and persisting the reconstruction (re-marked with the
+same tab color and comment) so the scan isn't repeated next time. A table's
+position and size come back exact — markers bound each other directly, and
+there's nowhere legitimate for real content to sit past a table's true
+edge. Its **style is a best-effort reconstruction** read back from the
+cells themselves, and can be imperfect: a table with exactly one data row,
+for instance, can never have its row-banding detected (there's no second
+row to compare against), so it always comes back reporting no banding even
+if it originally had some. Its **column-type restrictions cannot be
+recovered at all** — see
+[Restricting a column's type](#restricting-a-columns-type) — every column
+comes back as `ColumnType.ANY`. Two markers found claiming the same name
+can't be safely resolved either — that table is left out of the rebuilt
+schema (named in the warning) rather than guessing which one is real;
+every unambiguous table is unaffected.
 
 ### One kind of data per sheet
 

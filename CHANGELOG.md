@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the schema sheet is deleted and rebuilt from markers — a rebuilt table
     always reports `ColumnType.ANY` for every column.
 
+- **The reserved `_pyhandlexl_tables` schema sheet is now visibly marked**
+  — a red sheet tab and a warning comment on its first cell, written every
+  time the schema is saved (including right after a rebuild) — so it reads
+  as "don't touch this" to anyone opening the workbook by hand, not just to
+  someone who's read the docs.
+
 - **A worksheet now holds either named tables or plain grid data, never
   both.** Whichever writes to a sheet first claims it: `write_sheet`/
   `append_rows` claim it as `"grid"`; `Table.create` claims it as `"table"`.
