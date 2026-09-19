@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`Table.write()` merges concurrent changes instead of overwriting them.**
+  A `Table` remembers what it last saw on disk; if another writer changed the
+  table since, `write()` performs a three-way merge keyed by row label and
+  column header. Non-overlapping changes combine silently (rows and columns
+  each side added, edits to different cells, deletions the other side left
+  alone, renames, corner/style/column-type changes only one side made); where
+  both sides changed the same thing, **yours wins** and a `MergeConflictWarning`
+  lists what it overwrote. Deleting a row or column the other writer edited, or
+  editing one they deleted, is reported the same way. Rows and columns you both
+  appended keep their order (theirs, then yours). Afterwards the object holds
+  the merged table.
+  - `t.last_merge` (new) — a `MergeReport` (`rows_added`, `rows_removed`,
+    `columns_added`, `columns_removed`, `cells_updated`, `conflicts`) of what the
+    last `write()` merged in, or `None` if nothing had changed on disk.
+  - `MergeConflictWarning` and `MergeReport` (new, exported). A
+    `MergeConflictWarning` is a `Warning`, not a `PyhandlexlError`; the write still
+    succeeds.
+  - Column types are checked *after* merging, so a restriction another writer
+    added can reject a value you set (`ColumnTypeError`); nothing is written and
+    the `Table` object is left exactly as it was. A `Table` never read or created
+    has nothing to merge against and overwrites as before; a table with duplicate
+    labels falls back to yours replacing the disk version, with a warning.
+  - **This is not a lock.** The merge covers the time between `read` and
+    `write`; it does not stop two writes landing at the very same instant, nor
+    writes to different tables in one workbook overwriting each other (each write
+    re-saves the whole workbook). No file locking is used, since OS-level locking
+    behaves differently across platforms and filesystems.
+
+### Fixed
+- **Workbooks written by older versions no longer fail to load.** A reserved
+  schema sheet from ≤ 0.9.2 (7 or 8 columns, before column types and
+  creation/modification times existed) raised `ValueError`. It now loads with
+  defaults (default style, unrestricted columns, `None` dates) and is upgraded to
+  the current layout by the next write.
+
+### Changed
+- **Schema rebuild now infers column types instead of resetting them all
+  to `ColumnType.ANY`.** When the reserved `_pyhandlexl_tables` sheet is
+  deleted and rebuilt from markers, each data column is scanned: if every
+  non-blank value belongs to one Excel-native type, the column comes back
+  restricted to it (`TEXT`, `NUMBER`, `BOOLEAN`, `DATE`, `TIME`, or
+  `DURATION`); an empty or mixed column comes back `ANY`. The inferred
+  types always admit the data already in the table, so writing a rebuilt
+  table straight back never raises `ColumnTypeError`.
+  - This is inference, not recovery — nothing in a cell records a
+    restriction — so it can go either way: an empty or mixed column that
+    was restricted comes back `ANY` (lost), and a column deliberately left
+    unrestricted, but holding a single type, comes back restricted to it
+    (invented). Check `t.column_types` after a rebuild.
+  - `SchemaRebuiltWarning`'s message and the schema sheet's warning comment
+    now say this instead of "cannot be recovered at all". Creation and
+    modification times are still unrecoverable (there's no data to infer
+    them from) and still come back `None`.
+
 ## [0.9.3] — 2026-09-17
 
 ### Added

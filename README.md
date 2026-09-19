@@ -278,6 +278,76 @@ back to its tracked location — no `sheet=` needed, and `TableNotFoundError` if
 the table was never created (or has since been deleted). The file must
 already exist for either call — see [Files](#files).
 
+### Two people editing the same table
+
+More than one script — or person — can work on the same table without losing
+each other's changes, as long as they aren't writing at the very same instant.
+A `Table` remembers what it last saw on disk. If someone else changed the
+table since, `write()` reads what is on disk *now* and **merges** it with your
+edits, rather than replacing it with your stale copy:
+
+```python
+alice = Table.read("log.xlsx", "Log")
+bob   = Table.read("log.xlsx", "Log")
+
+alice.add_row("alice-1", [1, 2])
+bob.add_row("bob-1", [3, 4])
+
+alice.write("log.xlsx")
+bob.write("log.xlsx")        # merges: the file now has BOTH rows
+
+bob.data.row_labels          # [..., 'alice-1', 'bob-1'] — bob's object is updated too
+bob.last_merge               # MergeReport(rows_added=('alice-1',), ...)
+```
+
+Rows and columns are matched by label/header, and the merge is decided per
+row, column, and cell:
+
+| You and the other writer… | Result |
+|---|---|
+| added different rows/columns | both appear (yours after theirs when you both appended) |
+| edited different cells | both edits survive |
+| added the same label with the same values | one row, no conflict |
+| deleted a row/column the other left alone | it's gone |
+| renamed a row/column the other edited | your new name, their edit |
+| changed the corner, style, or a column type (only one side did) | that change is kept |
+| **changed the very same thing differently** | **yours wins**, with a warning |
+| deleted a row/column the other **edited** | your delete wins, with a warning |
+| edited a row/column the other **deleted** | your edit restores it, with a warning |
+
+Where yours wins over something the other writer did, `write()` still succeeds
+and emits a `MergeConflictWarning` naming each place it overwrote (up to ten,
+then a count). It isn't an error — use `warnings.filterwarnings("error",
+category=MergeConflictWarning)` if you'd rather stop instead. After any
+merge, `t.last_merge` is a `MergeReport` with `rows_added`, `rows_removed`,
+`columns_added`, `columns_removed`, `cells_updated` (your cells that took the
+other writer's value), and `conflicts`; it is `None` if nothing had changed on
+disk. Values are compared the way Excel stores them, so `5` vs `5.0`, or a
+`date` vs its midnight `datetime`, is not mistaken for an edit — while `True`
+vs `1` is.
+
+Details worth knowing:
+
+- Column types are checked **after** merging, so a restriction the other writer
+  added can reject a value you set: `ColumnTypeError`, nothing is written, and
+  your `Table` object is left exactly as it was.
+- A `Table` that was built in memory and never read or created has nothing to
+  merge against, so `write()` simply replaces the table, as before.
+- Merging needs unique labels. A table with duplicate row labels or column
+  headers (only possible from a hand-edited file) can't be matched row by row,
+  so yours replaces the disk version, with a warning.
+
+**What this does not do: it is not a lock.** The merge closes the gap between
+your `read` and your `write` — the long part, where you're editing. It does
+*not* stop two writes that land at the very same instant: each checks for
+changes and then saves as separate steps, so a write that sneaks in between them
+can still be overwritten. Writes to *different* tables in one workbook can also
+overwrite each other for the same reason (every write re-saves the whole
+workbook). If your writers can genuinely collide, serialise them yourself
+(a queue, a single writer process, or a lock of your own around the write).
+pyhandlexl deliberately does not take file locks itself, because OS file
+locking behaves differently across platforms and filesystems.
+
 ### Styling a table
 
 Every table is visually styled when it's created or written: bold, filled
@@ -357,12 +427,16 @@ store at all, and still fail this because it isn't the type *this* column
 was restricted to. Restricting a column doesn't touch data already in it
 until the next `create()`/`write()`; renaming, inserting, or dropping a
 column moves or drops its restriction along with it, and a newly inserted
-column always starts as `ColumnType.ANY`. Like style, a column's type
-restriction can't be recovered if the reserved schema sheet is deleted and
-rebuilt from markers (see
-[Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet))
-— a rebuilt table always comes back reporting `ColumnType.ANY` for every
-column.
+column always starts as `ColumnType.ANY`. If the reserved schema sheet is
+deleted and rebuilt from markers (see
+[Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet)),
+restrictions are **inferred** from what each column currently holds rather
+than restored — nothing in a cell records that a column was restricted.
+That can go either way: an empty or mixed column comes back `ColumnType.ANY`
+(a restriction lost), and a column you'd deliberately left unrestricted, but
+which happens to hold a single type, comes back restricted to it (one
+invented). Check `t.column_types` after a rebuild and `set_column_type` back
+anything that's wrong.
 
 ### Table metadata
 
@@ -399,12 +473,13 @@ from pyhandlexl import table_info
 table_info(path, "Sales")   # same TableInfo, without an existing Table object
 ```
 
-Both are persisted in the reserved schema sheet, and both are subject to
-the same rebuild limitation as style and column types: if that sheet is
-deleted and reconstructed from markers, there's nothing in a cell that
-records when a table was created or last modified, so a rebuilt table
-reports `created_at`/`modified_at` as `None` rather than a guessed time —
-size and sheet still come back exact, same as always.
+The dates are persisted in the reserved schema sheet, and unlike size and
+sheet they can't be reconstructed from the table itself: if that sheet is
+deleted and rebuilt from markers, nothing in a cell records when a table was
+created or last modified — and, unlike column types, there's no data to
+infer them from — so a rebuilt table reports `created_at`/`modified_at` as
+`None` rather than a guessed time. Size and sheet still come back exact,
+same as always.
 
 ### Equality
 
@@ -492,16 +567,24 @@ edge. Its **style is a best-effort reconstruction** read back from the
 cells themselves, and can be imperfect: a table with exactly one data row,
 for instance, can never have its row-banding detected (there's no second
 row to compare against), so it always comes back reporting no banding even
-if it originally had some. Its **column-type restrictions cannot be
-recovered at all** — see
-[Restricting a column's type](#restricting-a-columns-type) — every column
-comes back as `ColumnType.ANY`. Its **creation and modification times
-cannot be recovered either** — see [Table metadata](#table-metadata) —
+if it originally had some. Its **column types are inferred** from the
+values each column currently holds — a column whose values all share one
+Excel-native type comes back restricted to it, and an empty or mixed column
+comes back `ColumnType.ANY` — see
+[Restricting a column's type](#restricting-a-columns-type) for what that can
+get wrong. Its **creation and modification times
+cannot be recovered** — see [Table metadata](#table-metadata) —
 `t.info.created_at`/`.modified_at` both come back `None` rather than a
 guessed time. Two markers found claiming the same name can't be safely
 resolved either — that table is left out of the rebuilt schema (named in
 the warning) rather than guessing which one is real; every unambiguous
 table is unaffected.
+
+**Workbooks written by older versions** keep working: a reserved sheet with
+fewer columns than today's (written before column types, or before creation and
+modification times, existed) is read with sensible defaults — the default
+style, unrestricted columns, `None` dates — and upgraded to the current layout
+by the next write.
 
 ### One kind of data per sheet
 
@@ -844,11 +927,12 @@ All raised exceptions derive from `PyhandlexlError`:
 | `SheetKindError` | `ValueError` | the sheet already holds the other kind of data (table vs. grid), or is the reserved schema sheet |
 | `InvalidFileError` | — | file is missing or not a readable `.xlsx` |
 
-`SchemaRebuiltWarning` is not in this table on purpose — it's a `Warning`
-(via Python's `warnings` module), not a `PyhandlexlError`. The operation
-that triggers it still succeeds; see
-[Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet)
-for when it fires.
+`SchemaRebuiltWarning` and `MergeConflictWarning` are not in this table on
+purpose — they're `Warning`s (via Python's `warnings` module), not
+`PyhandlexlError`s. The operation that triggers them still succeeds; see
+[Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet) for
+when the first fires and [Two people editing the same table](#two-people-editing-the-same-table)
+for the second.
 
 ## Not in scope
 

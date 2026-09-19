@@ -400,7 +400,7 @@ class TestSchemaSheetIsMarked:
         comment = ws["A1"].comment
         assert comment is not None
         assert "do not edit or delete" in comment.text
-        assert "column-type restrictions" in comment.text
+        assert "column types are only inferred" in comment.text
         assert "creation/modification times cannot be recovered" in comment.text
 
     def test_marking_survives_a_second_save(self, data_sheet):
