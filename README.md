@@ -570,8 +570,9 @@ only relocates a table it already has a schema entry for. Instead, every
 operation that reads the schema (`Table.read`, `Table.write`, `Table.create`,
 `table_info`, `list_tables`, `delete_table`, `sheet_kind`, `write_sheet` (to a
 sheet that already exists), `append_rows`, `clear_all_sheet_data`,
-`delete_sheet`, `rename_sheet`) **rebuilds it** the moment it finds it missing: it scans every sheet for
-`"TABLE NAME"` markers, emits a `SchemaRebuiltWarning`, and — once the call
+`delete_sheet`, `rename_sheet`) **rebuilds it** the moment it finds it missing:
+it scans every sheet for `"TABLE NAME"` markers, emits a
+`SchemaRebuiltWarning`, and — once the call
 succeeds — saves the rebuilt sheet (re-marked with the same tab color and
 comment) so the scan isn't repeated next time. The warning names the tables
 found and points at the line of *your* code that made the call. A workbook
@@ -960,9 +961,13 @@ apostrophe (`SheetNameError`).
 
 Every write goes through the same steps:
 
-1. Save to a temporary file in the same directory.
-2. Verify it is a readable `.xlsx`.
-3. Atomically replace the original (`os.replace`).
+1. Refuse if the file is read-only (`FileLockedError`), and follow it if it is a
+   symlink so the real file is the one updated.
+2. Save to a temporary file in the same directory.
+3. Verify it is a readable `.xlsx` **and that every XML part in it parses** — a
+   file that merely opens as a zip is not enough.
+4. Give it the original's permissions and atomically replace the original
+   (`os.replace`).
 
 If any step fails the temporary file is removed and the original is left exactly
 as it was. If the target is locked (open in Excel), writes retry briefly before
@@ -1018,7 +1023,7 @@ All raised exceptions derive from `PyhandlexlError`:
 | `SheetNameError` | `ValueError` | invalid worksheet name |
 | `DimensionError` | `ValueError` | data exceeds Excel's 1,048,576 × 16,384 grid |
 | `SheetNotFoundError` | `KeyError` | no worksheet with that name |
-| `FileLockedError` | `OSError` | file stayed locked through every retry |
+| `FileLockedError` | `OSError` | file stayed locked (open in Excel) through every retry, or is read-only |
 | `CellTypeError` | `TypeError` | a value is not something Excel can store faithfully (a foreign type, an XML-illegal or over-long string, `nan`/`inf`, an out-of-range date, …) |
 | `ColumnTypeError` | `TypeError` | a value doesn't match its column's `ColumnType` restriction |
 | `TableNotFoundError` | `KeyError` | no named table with that name, or its marker is gone |
@@ -1039,7 +1044,10 @@ for the second.
 formatting (`Table`'s own [styling](#styling-a-table) is a curated set of
 choices, not a general "format any cell" API), conditional formatting,
 formulas, charts, images, merged cells, `.xls` (old format), or password
-protection / encryption. For any of that, use openpyxl directly.
+protection / encryption. For any of that, use openpyxl directly. (Charts,
+merged cells and the like that are already in a workbook are left alone when
+you write to it — see [Files](#files) — but pyhandlexl has no way to create or
+edit them.)
 
 ## Development
 
