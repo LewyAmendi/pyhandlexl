@@ -560,30 +560,54 @@ comment on its first cell, every time it's written, so it's hard to miss
 even for someone opening the workbook by hand without having read this.
 
 **If that reserved sheet is deleted entirely**, self-heal can't help — it
-only relocates a table it already has a schema entry for. Instead,
-`Table.read`, `Table.write`, `delete_table`, and `list_tables` all
-automatically rebuild the whole schema by scanning every sheet for
-`"TABLE NAME"` markers the moment they find it missing, emitting a
-`SchemaRebuiltWarning` and persisting the reconstruction (re-marked with the
-same tab color and comment) so the scan isn't repeated next time. A table's
-position and size come back exact — markers bound each other directly, and
-there's nowhere legitimate for real content to sit past a table's true
-edge. Its **style is a best-effort reconstruction** read back from the
-cells themselves, and can be imperfect: a table with exactly one data row,
-for instance, can never have its row-banding detected (there's no second
-row to compare against), so it always comes back reporting no banding even
-if it originally had some. Its **column types are inferred** from the
-values each column currently holds — a column whose values all share one
-Excel-native type comes back restricted to it, and an empty or mixed column
-comes back `ColumnType.ANY` — see
-[Restricting a column's type](#restricting-a-columns-type) for what that can
-get wrong. Its **creation and modification times
-cannot be recovered** — see [Table metadata](#table-metadata) —
-`t.info.created_at`/`.modified_at` both come back `None` rather than a
-guessed time. Two markers found claiming the same name can't be safely
-resolved either — that table is left out of the rebuilt schema (named in
-the warning) rather than guessing which one is real; every unambiguous
-table is unaffected.
+only relocates a table it already has a schema entry for. Instead, every
+operation that reads the schema (`Table.read`, `Table.write`, `Table.create`,
+`table_info`, `list_tables`, `delete_table`, `sheet_kind`, `write_sheet` (to a
+sheet that already exists), `append_rows`, `clear_all_sheet_data`,
+`delete_sheet`, `rename_sheet`) **rebuilds it** the moment it finds it missing: it scans every sheet for
+`"TABLE NAME"` markers, emits a `SchemaRebuiltWarning`, and — once the call
+succeeds — saves the rebuilt sheet (re-marked with the same tab color and
+comment) so the scan isn't repeated next time. The warning names the tables
+found and points at the line of *your* code that made the call. A workbook
+with no tables has nothing to rebuild, so it neither warns nor gains a
+schema sheet.
+
+**What a rebuild restores:**
+
+- **Which tables exist, and their names** — every marker found, on any sheet.
+- **Each table's exact position and size** — sheet, top-left corner, rows and
+  columns. Markers bound each other directly, and there's nowhere legitimate
+  for real content to sit past a table's true edge.
+- **All of the table's contents** — data, row labels, column headers, and
+  corner. Those live in the cells, never in the schema, so they can't be lost
+  by deleting it.
+- **A style and column types, as a best-effort guess** (next list).
+
+**What a rebuild does not — and cannot — restore:**
+
+- **Creation and modification times.** Nothing in a cell records them, and
+  there's no data to infer them from, so `t.info.created_at`/`.modified_at`
+  come back `None` rather than a guessed time. (See [Table metadata](#table-metadata).)
+- **The exact style.** It is read back from the cells themselves and can be
+  imperfect: a table with exactly one data row, for instance, can never have
+  its row-banding detected (there's no second row to compare against), so it
+  always comes back reporting no banding even if it originally had some.
+- **Your declared column types.** They are *inferred* from the values each
+  column currently holds — a column whose values all share one Excel-native
+  type comes back restricted to it, and an empty or mixed column comes back
+  `ColumnType.ANY`. That can go either way: a restriction can be **lost**, or
+  one **invented** for a column you'd left unrestricted. See
+  [Restricting a column's type](#restricting-a-columns-type).
+- **A table whose marker is gone.** If the `"TABLE NAME"` cell was deleted or
+  overwritten, there is nothing to find: the table is not rebuilt, and
+  reading it raises `TableNotFoundError`.
+- **A table name claimed by two markers.** It can't be safely resolved, so that
+  table is left out of the rebuilt schema (named in the warning) rather than
+  guessing which one is real; it isn't reachable by name until you resolve it
+  by hand. Every unambiguous table is unaffected.
+
+After a rebuild, check `t.style`, `t.column_types`, and `t.info` on the tables
+you care about, set back anything that's wrong, and `write()` it.
 
 **Workbooks written by older versions** keep working: a reserved sheet with
 fewer columns than today's (written before column types, or before creation and
@@ -884,6 +908,15 @@ validated everywhere: max 31 characters, none of `\ / ? * [ ] :`, and
 [One kind of data per sheet](#one-kind-of-data-per-sheet) for `sheet_kind`
 and `clear_all_sheet_data`.
 
+Excel treats sheet names as **case-insensitive**, so `create_sheet`,
+`rename_sheet`, `write_sheet`, and `append_rows` refuse a name that differs from
+an existing sheet's only by capitalisation (`ValueError`) instead of letting the
+file quietly end up with `data1` when you asked for `data`. (Changing just a
+sheet's own capitalisation — `rename_sheet(path, "log", "LOG")` — is fine.) The
+same goes for the reserved schema sheet's name, `_pyhandlexl_tables`, in *any*
+capitalisation, or with stray spaces around it: no call can create, rename to,
+write to, or otherwise use it (`SheetKindError`).
+
 ## Safe writes
 
 Every write goes through the same steps:
@@ -929,7 +962,7 @@ All raised exceptions derive from `PyhandlexlError`:
 | `ColumnTypeError` | `TypeError` | a value doesn't match its column's `ColumnType` restriction |
 | `TableNotFoundError` | `KeyError` | no named table with that name, or its marker is gone |
 | `TableExistsError` | `ValueError` | a named table with that name already exists |
-| `SheetKindError` | `ValueError` | the sheet already holds the other kind of data (table vs. grid), or is the reserved schema sheet |
+| `SheetKindError` | `ValueError` | the sheet already holds the other kind of data (table vs. grid), or its name is the reserved schema sheet's (in any capitalisation) |
 | `InvalidFileError` | — | file is missing or not a readable `.xlsx` |
 
 `SchemaRebuiltWarning` and `MergeConflictWarning` are not in this table on

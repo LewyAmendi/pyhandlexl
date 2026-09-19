@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The schema-rebuild warning now points at your code.** `SchemaRebuiltWarning`
+  used to be attributed to a line inside pyhandlexl (`table.py`, `core.py`), so
+  you couldn't tell which of your calls had triggered it — and Python's default
+  once-per-location filtering could hide a repeat. It now reports the line that
+  called the pyhandlexl function.
+- **Every operation that rebuilds the schema now saves the rebuild.**
+  `sheet_kind`, `write_sheet` (to an existing sheet) and `append_rows` used to
+  warn but leave the schema sheet missing, so they rescanned and warned again on
+  every call. They now save it, like `Table.read` and `list_tables` already did.
+- The README's schema-rebuild section is now two explicit lists — what a rebuild
+  restores, and what it does not (and cannot) — including which operations trigger
+  it and that a table whose marker is gone is not recovered.
+
+### Fixed
+- **A sheet name that collides with the reserved schema sheet's is refused.**
+  `_PYHANDLEXL_TABLES` (any capitalisation, or with surrounding spaces) used to be
+  accepted by `create_sheet`, `rename_sheet`, `write_sheet`, `append_rows` and
+  `Table.create`. Excel ignores case and openpyxl silently renames a would-be
+  duplicate, so the call reported success but produced `…_TABLES1`, and a lookalike
+  created before the schema existed pushed the real schema sheet to
+  `_pyhandlexl_tables1` where it was never found again. All of these now raise
+  `SheetKindError`, as does `clear_all_sheet_data`/`delete_sheet`/`sheet_kind`, and
+  `create_sheet` refuses the exact reserved name even when no schema exists yet.
+  Saving the schema into a hand-edited file that already holds such a lookalike now
+  raises `SheetKindError` instead of quietly misnaming it.
+- **A sheet name that differs from an existing one only by capitalisation is
+  refused, not silently renamed.** `create_sheet("DATA")` with `Data` present used
+  to succeed and create `DATA1`; `write_sheet(sheet="data")` wrote to a brand-new
+  `data1` sheet instead of `Data`; `rename_sheet` did the same. These now raise
+  `ValueError` naming the clashing sheet. Renaming a sheet's own capitalisation
+  (`log` → `LOG`) now works — openpyxl used to turn it into `LOG1`.
+
 ## [0.9.4] — 2026-09-19
 
 ### Added
