@@ -29,12 +29,57 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 
 from pyhandlexl._merge import Snapshot
 from pyhandlexl.column_type import ColumnType
-from pyhandlexl.errors import SchemaRebuiltWarning, TableExistsError, TableNotFoundError
+from pyhandlexl.errors import (
+    SchemaRebuiltWarning,
+    SheetKindError,
+    TableExistsError,
+    TableNotFoundError,
+)
 from pyhandlexl.style import TableStyle
 
 SCHEMA_SHEET = "_pyhandlexl_tables"
 MARKER = "TABLE NAME"
+
+
+def is_schema_name(name: str) -> bool:
+    """Whether *name* is the reserved schema sheet's name, or a lookalike of it.
+
+    Excel treats sheet names case-insensitively, and openpyxl silently renames a
+    would-be duplicate (``_PYHANDLEXL_TABLES`` becomes ``_PYHANDLEXL_TABLES1``) —
+    so a lookalike is never harmless: it would either masquerade as the schema
+    sheet or push the real one off its exact name. Surrounding whitespace is
+    ignored too, so ``"_pyhandlexl_tables "`` can't slip through.
+    """
+    return name.strip().lower() == SCHEMA_SHEET
+
+
+def reserved_error(name: str, what: str) -> SheetKindError:
+    """The error for using the reserved schema sheet name (or a lookalike) for *what*."""
+    if name == SCHEMA_SHEET:
+        return SheetKindError(f"{SCHEMA_SHEET!r} is reserved and {what}")
+    return SheetKindError(
+        f"{name!r} is too close to the reserved sheet name {SCHEMA_SHEET!r} (Excel ignores "
+        f"capitalisation, so the two would collide) and {what}"
+    )
+
+
+def case_clash(sheetnames: list[str], name: str) -> str | None:
+    """An existing sheet that differs from *name* only by capitalisation, if any.
+
+    Excel (and openpyxl) treat ``Data`` and ``data`` as the same sheet name. A
+    creation path must refuse such a name rather than let openpyxl quietly
+    invent ``data1`` instead.
+    """
+    for existing in sheetnames:
+        if existing != name and existing.lower() == name.lower():
+            return existing
+    return None
+
+
 _SCHEMA_TAB_COLOR = "FF0000"
+# warnings.warn depth from rebuild_schema to the user's own line: rebuild_schema (1) <-
+# load_schema (2) <- the public function that called it (3) <- the user's code (4).
+_CALLER_LEVEL = 4
 _SCHEMA_WARNING = (
     "pyhandlexl-managed — do not edit or delete by hand.\n\n"
     "This sheet tracks every named table's location, size, style, "
@@ -179,6 +224,13 @@ def save_schema(workbook, entries: dict[str, TableEntry]) -> None:
         ws = workbook[SCHEMA_SHEET]
         ws.delete_rows(1, ws.max_row)
     else:
+        clash = case_clash(workbook.sheetnames, SCHEMA_SHEET)
+        if clash is not None:  # only a hand-edited file can get here; creating it would
+            raise SheetKindError(  # make openpyxl name the schema sheet "..._tables1"
+                f"sheet {clash!r} collides with the reserved sheet name {SCHEMA_SHEET!r} "
+                "(Excel ignores capitalisation), so the schema sheet can't be created — "
+                "rename or remove that sheet"
+            )
         ws = workbook.create_sheet(SCHEMA_SHEET)
     ws.sheet_properties.tabColor = _SCHEMA_TAB_COLOR
     ws.append(list(_SCHEMA_HEADER))
@@ -425,7 +477,7 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
             f"the schema ({by_name[name]}) — skipped, since it's not safe to guess which "
             "one is real; it won't be reachable by name until this is resolved by hand",
             SchemaRebuiltWarning,
-            stacklevel=3,
+            stacklevel=_CALLER_LEVEL,
         )
 
     by_sheet: dict[str, list[tuple[int, int, str]]] = {}
@@ -466,7 +518,7 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
         "holding one type comes back restricted to it); creation and modification times "
         "can't be recovered and come back as None.",
         SchemaRebuiltWarning,
-        stacklevel=3,
+        stacklevel=_CALLER_LEVEL,
     )
     return entries
 

@@ -919,8 +919,8 @@ class Table:
         """
         workbook = safe_load(path)
         try:
-            if sheet == mt.SCHEMA_SHEET:
-                raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and cannot hold a table")
+            if mt.is_schema_name(sheet):
+                raise mt.reserved_error(sheet, "cannot hold a table")
             if sheet not in workbook.sheetnames:
                 raise SheetNotFoundError(sheet)
             entries = mt.load_schema(workbook)

@@ -45,6 +45,25 @@ def _checked_grid(rows: Iterable[Iterable[object]]) -> list[list[object]]:
     return grid
 
 
+def _refuse_case_clash(workbook: Workbook, name: str, *, ignoring: str | None = None) -> None:
+    """Refuse a name that differs from an existing sheet's only by capitalisation.
+
+    Excel and openpyxl treat ``Data`` and ``data`` as one name; openpyxl would
+    quietly create ``data1`` instead of what was asked for, so a call that
+    reports success would have written to (or named) the wrong sheet. A name
+    that already exists exactly is fine — that's just the sheet itself.
+    *ignoring* leaves one sheet out, for renaming a sheet's own capitalisation.
+    """
+    if name in workbook.sheetnames:
+        return
+    clash = mt.case_clash([n for n in workbook.sheetnames if n != ignoring], name)
+    if clash is not None:
+        raise ValueError(
+            f"a sheet called {clash!r} already exists — Excel treats sheet names as "
+            f"case-insensitive, so {name!r} would collide with it"
+        )
+
+
 def _read_csv_rows(path: Path) -> list[list[str]]:
     with path.open(newline="", encoding="utf-8-sig") as f:
         return [list(row) for row in csv.reader(f)]
@@ -262,8 +281,10 @@ def write_sheet(
         CellTypeError: a value is not a type Excel can store (.xlsx only).
         DimensionError: the data exceeds the .xlsx row or column limits
             (.xlsx only — a .csv file has no size limit).
-        ValueError: *orientation* is not ``"rows"`` or ``"columns"``, or
-            *sheet* is given for a .csv file.
+        ValueError: *orientation* is not ``"rows"`` or ``"columns"``, *sheet*
+            is given for a .csv file, or *sheet* differs from an existing
+            worksheet's name only by capitalisation (Excel treats those as
+            the same name).
     """
     if orientation not in ("rows", "columns"):
         raise ValueError(f"orientation must be 'rows' or 'columns', got {orientation!r}")
@@ -290,15 +311,19 @@ def write_sheet(
     workbook = safe_load(path)
     try:
         name = sheet if sheet is not None else workbook.active.title
-        if name == mt.SCHEMA_SHEET:
-            raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and cannot be written to")
+        if mt.is_schema_name(name):
+            raise mt.reserved_error(name, "cannot be written to")
+        _refuse_case_clash(workbook, name)
         if name in workbook.sheetnames:
+            schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
             entries = mt.load_schema(workbook)
             if mt.sheet_kind(workbook, entries, name) == "table":
                 raise SheetKindError(
                     f"sheet {name!r} holds table data — write_sheet() would corrupt it; "
                     "use Table.write()/Table.create(), or clear_all_sheet_data() first"
                 )
+            if not schema_existed and entries:  # keep a rebuilt schema, as the reads do
+                mt.save_schema(workbook, entries)
             index = workbook.sheetnames.index(name)
             workbook.remove(workbook[name])
             worksheet = workbook.create_sheet(title=name, index=index)
@@ -357,12 +382,13 @@ def append_rows(
     Raises:
         FileNotFoundError: no file at *path*.
         SheetNameError: *sheet* is not a valid worksheet name.
-        SheetKindError: *sheet* already holds table data, or is the reserved
-            schema sheet (.xlsx only).
+        SheetKindError: *sheet* already holds table data, or its name is the
+            reserved schema sheet's, in any capitalisation (.xlsx only).
         CellTypeError: a value is not a type Excel can store (.xlsx only).
         DimensionError: appending would exceed the .xlsx row or column
             limits (.xlsx only).
-        ValueError: *sheet* is given for a .csv file.
+        ValueError: *sheet* is given for a .csv file, or differs from an
+            existing worksheet's name only by capitalisation.
     """
     path = Path(path)
     grid = [list(row) for row in rows]
@@ -383,6 +409,10 @@ def append_rows(
 
     workbook = safe_load(path)
     try:
+        if sheet is not None:
+            if mt.is_schema_name(sheet):  # checked before anything is created under that name
+                raise mt.reserved_error(sheet, "cannot be written to")
+            _refuse_case_clash(workbook, sheet)
         if sheet is None:
             worksheet = workbook.active
         elif sheet in workbook.sheetnames:
@@ -390,14 +420,17 @@ def append_rows(
         else:
             worksheet = workbook.create_sheet(title=sheet)
 
-        if worksheet.title == mt.SCHEMA_SHEET:
-            raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and cannot be written to")
+        if mt.is_schema_name(worksheet.title):
+            raise mt.reserved_error(worksheet.title, "cannot be written to")
+        schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
         entries = mt.load_schema(workbook)
         if mt.sheet_kind(workbook, entries, worksheet.title) == "table":
             raise SheetKindError(
                 f"sheet {worksheet.title!r} holds table data — append_rows() would corrupt "
                 "it; use Table.write()/Table.create(), or clear_all_sheet_data() first"
             )
+        if not schema_existed and entries:  # keep a rebuilt schema, as the reads do
+            mt.save_schema(workbook, entries)
 
         widest = max(len(row) for row in grid)
         check_dimensions(worksheet.max_row + len(grid), max(widest, worksheet.max_column))
@@ -549,17 +582,23 @@ def sheet_kind(path: str | Path, sheet: str) -> SheetKind:
     Raises:
         FileNotFoundError: no file at *path*.
         SheetNotFoundError: no worksheet called *sheet*.
-        SheetKindError: *sheet* is the reserved schema sheet — it has no
+        SheetKindError: *sheet* is the reserved schema sheet (or a lookalike
+            of its name) — it has no
             meaningful kind of its own.
     """
     workbook = safe_load(path)
     try:
-        if sheet == mt.SCHEMA_SHEET:
-            raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and has no meaningful kind")
+        if mt.is_schema_name(sheet):
+            raise mt.reserved_error(sheet, "has no meaningful kind")
         if sheet not in workbook.sheetnames:
             raise SheetNotFoundError(sheet)
+        schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
         entries = mt.load_schema(workbook)
-        return mt.sheet_kind(workbook, entries, sheet)
+        kind = mt.sheet_kind(workbook, entries, sheet)
+        if not schema_existed and entries:  # persist a rebuild, like the other reads do
+            mt.save_schema(workbook, entries)
+            atomic_save(workbook, path)
+        return kind
     finally:
         workbook.close()
 
@@ -577,12 +616,13 @@ def clear_all_sheet_data(path: str | Path, sheet: str) -> None:
     Raises:
         FileNotFoundError: no file at *path*.
         SheetNotFoundError: no worksheet called *sheet*.
-        SheetKindError: *sheet* is the reserved schema sheet.
+        SheetKindError: *sheet* is the reserved schema sheet (or a lookalike
+            of its name).
     """
     workbook = safe_load(path)
     try:
-        if sheet == mt.SCHEMA_SHEET:
-            raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and cannot be cleared")
+        if mt.is_schema_name(sheet):
+            raise mt.reserved_error(sheet, "cannot be cleared")
         if sheet not in workbook.sheetnames:
             raise SheetNotFoundError(sheet)
 
@@ -689,13 +729,20 @@ def create_sheet(path: str | Path, name: str) -> None:
     Raises:
         FileNotFoundError: no file at *path*.
         SheetNameError: *name* is not a valid worksheet name.
-        ValueError: a worksheet called *name* already exists.
+        SheetKindError: *name* is the reserved schema sheet's name in any
+            capitalisation (``_PYHANDLEXL_TABLES`` would push the real one off
+            its exact name, since Excel ignores case).
+        ValueError: a worksheet called *name* already exists — including one that
+            differs only by capitalisation, which Excel treats as the same name.
     """
     check_sheet_name(name)
     workbook = safe_load(path)
     try:
+        if mt.is_schema_name(name):
+            raise mt.reserved_error(name, "cannot be created")
         if name in workbook.sheetnames:
             raise ValueError(f"sheet {name!r} already exists")
+        _refuse_case_clash(workbook, name)
         workbook.create_sheet(title=name)
         atomic_save(workbook, path)
     finally:
@@ -718,8 +765,8 @@ def delete_sheet(path: str | Path, name: str) -> None:
     """
     workbook = safe_load(path)
     try:
-        if name == mt.SCHEMA_SHEET:
-            raise SheetKindError(f"{mt.SCHEMA_SHEET!r} is reserved and cannot be deleted")
+        if mt.is_schema_name(name):
+            raise mt.reserved_error(name, "cannot be deleted")
         if name not in workbook.sheetnames:
             raise SheetNotFoundError(name)
         if len(workbook.sheetnames) == 1:
@@ -748,24 +795,32 @@ def rename_sheet(path: str | Path, old: str, new: str) -> None:
         SheetNameError: *new* is not a valid worksheet name.
         FileNotFoundError: no file at *path*.
         SheetNotFoundError: no worksheet called *old*.
-        SheetKindError: *old* is the reserved schema sheet — renaming it
+        SheetKindError: *old* is the reserved schema sheet (or a lookalike of
+            its name) — renaming it
             away would orphan it under a name pyhandlexl no longer
             recognizes, same as deleting it — or *new* is the reserved
             name, which would collide with (or masquerade as) it.
-        ValueError: a different worksheet called *new* already exists.
+        ValueError: a different worksheet called *new* already exists, including
+            one that differs only by capitalisation. Changing just *old*'s own
+            capitalisation (``log`` -> ``LOG``) is allowed.
     """
     check_sheet_name(new)
     workbook = safe_load(path)
     try:
-        if old == mt.SCHEMA_SHEET or new == mt.SCHEMA_SHEET:
-            raise SheetKindError(
-                f"{mt.SCHEMA_SHEET!r} is reserved and cannot be renamed to or from"
-            )
+        for reserved in (old, new):
+            if mt.is_schema_name(reserved):
+                raise mt.reserved_error(reserved, "cannot be renamed to or from")
         if old not in workbook.sheetnames:
             raise SheetNotFoundError(old)
         if new != old and new in workbook.sheetnames:
             raise ValueError(f"sheet {new!r} already exists")
-        workbook[old].title = new
+        _refuse_case_clash(workbook, new, ignoring=old)
+        worksheet = workbook[old]
+        if new != old and new.lower() == old.lower():
+            # A change of capitalisation only. openpyxl would take "data" -> "DATA" for a
+            # duplicate of itself and name the sheet "DATA1", so go via a throwaway name.
+            worksheet.title = f"_rename_{token_hex(6)}"
+        worksheet.title = new
 
         if new != old:
             schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
