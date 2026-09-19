@@ -249,5 +249,5 @@ def show(
             display_rows.append(["..."] * width)
 
     col_widths = [max(len(r[c]) for r in display_rows) for c in range(width)]
-    for row in display_rows:
-        print("  ".join(cell.ljust(w) for cell, w in zip(row, col_widths, strict=True)))
+    for line in display_rows:
+        print("  ".join(cell.ljust(w) for cell, w in zip(line, col_widths, strict=True)))

@@ -6,6 +6,7 @@ from pyhandlexl.errors import (
     CellTypeError,
     DimensionError,
     FileLockedError,
+    FileReadOnlyError,
     InvalidFileError,
     PyhandlexlError,
     SheetNameError,
@@ -19,6 +20,7 @@ def test_all_errors_derive_from_base():
         DimensionError,
         InvalidFileError,
         FileLockedError,
+        FileReadOnlyError,
         SheetNotFoundError,
         CellTypeError,
     ):
@@ -33,6 +35,14 @@ def test_cell_type_error_can_be_caught_as_type_error():
 def test_file_locked_error_can_be_caught_as_oserror():
     with pytest.raises(OSError):
         raise FileLockedError("still open in Excel")
+
+
+def test_a_read_only_error_is_a_locked_error_so_older_handlers_still_catch_it():
+    assert issubclass(FileReadOnlyError, FileLockedError)
+    with pytest.raises(FileLockedError):
+        raise FileReadOnlyError("read-only")
+    with pytest.raises(OSError):
+        raise FileReadOnlyError("read-only")
 
 
 def test_sheet_name_error_can_be_caught_as_value_error():

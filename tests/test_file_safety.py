@@ -19,6 +19,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from pyhandlexl import (
     CellTypeError,
     FileLockedError,
+    FileReadOnlyError,
     InvalidFileError,
     SchemaRebuiltWarning,
     Table,
@@ -401,8 +402,9 @@ class TestReplacingAFileKeepsItWhatItWas:
                 lambda: create_sheet(book, "S2"),
                 lambda: Table(column_headers=["a"], name="T").create(book, sheet="Blank"),
             ):
-                with pytest.raises(FileLockedError, match="read-only"):
+                with pytest.raises(FileReadOnlyError, match="read-only") as caught:
                     call()
+                assert isinstance(caught.value, FileLockedError)  # what 0.9.5 raised
         finally:
             os.chmod(book, stat.S_IWRITE | stat.S_IREAD)
         assert book.read_bytes() == before
@@ -414,7 +416,7 @@ class TestReplacingAFileKeepsItWhatItWas:
         path.write_bytes(b"keep\n")
         os.chmod(path, stat.S_IREAD)
         try:
-            with pytest.raises(FileLockedError, match="read-only"):
+            with pytest.raises(FileReadOnlyError, match="read-only"):
                 write_sheet(path, [["nope"]])
             with pytest.raises(PermissionError):  # an append opens the file itself
                 append_rows(path, [["nope"]])

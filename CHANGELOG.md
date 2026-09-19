@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Creating and rewriting tables is 6–8× faster.** Styling a table used to
+  build fresh font/fill/border objects for every cell, which openpyxl then hashes to
+  find each one's slot in the workbook's style table — over 90% of the time to create
+  or write a table, and the reason a large table took seconds. A table has only a few
+  dozen distinct looks, so each is now painted once and its style record is copied
+  onto the other cells that share it. The result is identical cell for cell (a test
+  compares it against the old one-cell-at-a-time painter across styles, shapes and
+  positions), and the saved workbook's style table is now a few dozen entries, not
+  thousands. A date, time or duration cell keeps the number format its value gave it.
+  On a 4,000-row × 8-column table (one Windows machine): `create` 9.0 s → 1.2 s, and
+  reading it back, adding a row and `write`-ing 11.7 s → 1.8 s.
+- **`FileReadOnlyError`** (new, exported): writing to a read-only file now raises this
+  instead of a plain `FileLockedError`, because the two call for different responses
+  (retrying can never help a read-only file). It *is* a `FileLockedError`, so code that
+  catches that keeps working unchanged.
+- **`MergeReport` is now `pyhandlexl.MergeReport`** as far as `repr`, `help()`, pickle
+  and the docs are concerned, instead of showing a private module.
+- **openpyxl `>=3.1.3,<4`.** 3.1.0–3.1.2 leak a file handle on Windows, which surfaced
+  as a spurious "file is locked" error after a save. The lower bound is now tested
+  in CI (on Linux and Windows) alongside the newest release, and 4.x is excluded until
+  it has been tried.
+- **Status is now Beta** (PyPI classifier), and Python 3.14 is supported and tested,
+  as is macOS.
+- **The package is checked with `mypy --strict` in CI** (it already shipped `py.typed`).
+  A few internals were retyped to satisfy it; no public signature changed.
+
+### Documented
+- **Formulas are not a supported feature.** A string starting with `=` is still
+  stored as a formula (an openpyxl behaviour), but that is untested and **may change
+  or be removed in a future release**; the README now says so where it describes it.
+- **A CSV stays all text** — every value is a `str`, nothing is inferred. The README
+  no longer says this "may change in a future release"; it won't.
+
 ## [0.9.5] — 2026-09-20
 
 ### Changed

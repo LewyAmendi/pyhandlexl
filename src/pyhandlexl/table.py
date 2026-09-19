@@ -21,6 +21,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 from openpyxl.utils import coordinate_to_tuple
 
@@ -75,6 +76,20 @@ class TableInfo:
     sheet: str | None
     style: TableStyle
     column_types: dict[str, ColumnType]
+
+
+class _Position(NamedTuple):
+    """A cell addressed by 1-based Excel position."""
+
+    row: int
+    column: int
+
+
+class _Labels(NamedTuple):
+    """A data cell addressed by its row label and column header."""
+
+    row: str
+    column: str
 
 
 def _values(values: Iterable[object]) -> list[object]:
@@ -366,7 +381,7 @@ class Table:
 
         ``None`` if that write found nothing had changed on disk since this table
         was read (or if it hasn't written yet). Otherwise a
-        :class:`~pyhandlexl._merge.MergeReport`: the rows and columns other writers
+        :class:`~pyhandlexl.MergeReport`: the rows and columns other writers
         added or removed, how many of your cells took their value, and any
         ``conflicts`` where yours won (also raised as a ``MergeConflictWarning``).
         """
@@ -493,11 +508,11 @@ class Table:
 
     def _dispatch(
         self, ref: str | None, row: int | str | None, column: int | str | None
-    ) -> tuple[bool, int | str, int | str]:
-        """Resolve ``ref``/``row``/``column`` into ``(is_position, row_val, col_val)``.
+    ) -> _Position | _Labels:
+        """Resolve ``ref``/``row``/``column`` into a position or a label pair.
 
-        ``is_position=True`` — ``row_val``/``col_val`` are 1-based Excel ints.
-        ``is_position=False`` — they are a row label / column header string.
+        A :class:`_Position` holds 1-based Excel ints; :class:`_Labels` holds a row
+        label and a column header.
         """
         if ref is not None:
             if row is not None or column is not None:
@@ -506,15 +521,15 @@ class Table:
                 r, c = coordinate_to_tuple(ref)
             except (ValueError, TypeError, UnboundLocalError):
                 raise ValueError(f"invalid cell reference: {ref!r}") from None
-            return True, r, c
+            return _Position(r, c)
 
         if row is None or column is None:
             raise TypeError("give a ref like 'B2', or both row= and column=")
 
         if isinstance(row, int) and isinstance(column, int):
-            return True, row, column
+            return _Position(row, column)
         if isinstance(row, str) and isinstance(column, str):
-            return False, row, column
+            return _Labels(row, column)
         raise TypeError("row and column must both be int (position) or both be str (label)")
 
     def read_cell(
@@ -536,9 +551,9 @@ class Table:
         or data. By label it always reads data (the label-addressed equivalent
         of ``read_cell(row=2, column=2)``, wherever that intersection lives).
         """
-        is_position, r, c = self._dispatch(ref, row, column)
-        if is_position:
-            kind, i, j = self._classify(r, c)
+        target = self._dispatch(ref, row, column)
+        if isinstance(target, _Position):
+            kind, i, j = self._classify(target.row, target.column)
             if kind == "corner":
                 return self._corner
             if kind == "header":
@@ -546,7 +561,7 @@ class Table:
             if kind == "label":
                 return self._row_labels[i]
             return self._data[i][j]
-        return self._data[self._row_index(r)][self._column_index(c)]
+        return self._data[self._row_index(target.row)][self._column_index(target.column)]
 
     # -------------------------------------------------------------- mutation
 
@@ -566,11 +581,11 @@ class Table:
         :meth:`set_corner` for those. By label there's no other kind of cell
         to reach, so it always sets data.
         """
-        is_position, r, c = self._dispatch(ref, row, column)
-        if is_position:
-            self._set_by_position(r, c, value)
+        target = self._dispatch(ref, row, column)
+        if isinstance(target, _Position):
+            self._set_by_position(target.row, target.column, value)
         else:
-            self._data[self._row_index(r)][self._column_index(c)] = value
+            self._data[self._row_index(target.row)][self._column_index(target.column)] = value
 
     def _set_by_position(self, row: int, col_num: int, value: object) -> None:
         kind, i, j = self._classify(row, col_num)
@@ -770,8 +785,8 @@ class Table:
                 grid.append(["..." for _ in grid[-1]])
 
         widths = [max(len(row[c]) for row in grid) for c in range(len(grid[0]))]
-        for row in grid:
-            print("  ".join(cell.ljust(w) for cell, w in zip(row, widths, strict=True)))
+        for line in grid:
+            print("  ".join(cell.ljust(w) for cell, w in zip(line, widths, strict=True)))
 
     # ----------------------------------------------------------------- write
 
@@ -849,6 +864,8 @@ class Table:
                 rules out is caught here too; nothing is written and this
                 object is left exactly as it was.
             FileLockedError: the file stayed locked (open in Excel) through every retry.
+            FileReadOnlyError: the file is read-only, so nothing is written (a kind of
+                ``FileLockedError``).
         """
         report: MergeReport | None = None
         workbook = safe_load(path)
@@ -941,6 +958,8 @@ class Table:
             ColumnTypeError: a data value doesn't match its column's type restriction.
             DimensionError: the placed table would exceed Excel's grid limits.
             FileLockedError: the file stayed locked (open in Excel) through every retry.
+            FileReadOnlyError: the file is read-only, so nothing is written (a kind of
+                ``FileLockedError``).
         """
         workbook = safe_load(path)
         try:

@@ -8,9 +8,10 @@ from collections.abc import Iterable
 from itertools import zip_longest
 from pathlib import Path
 from secrets import token_hex
-from typing import Literal
+from typing import Literal, cast
 
 from openpyxl import Workbook
+from openpyxl.worksheet.worksheet import Worksheet
 
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._multi_table import _to_label
@@ -22,7 +23,7 @@ from pyhandlexl._safety import (
     safe_delete,
     safe_load,
 )
-from pyhandlexl.errors import SheetKindError, SheetNotFoundError
+from pyhandlexl.errors import InvalidFileError, SheetKindError, SheetNotFoundError
 from pyhandlexl.table import TableInfo
 from pyhandlexl.validate import (
     check_cell_value,
@@ -32,7 +33,7 @@ from pyhandlexl.validate import (
 )
 
 Orientation = Literal["rows", "columns"]
-SheetKind = Literal["table", "grid", "empty"]
+SheetKind = mt.SheetKind
 
 # Extensions openpyxl recognises as Excel workbooks.
 _WORKBOOK_SUFFIXES = frozenset({".xlsx", ".xlsm", ".xltx", ".xltm"})
@@ -41,6 +42,14 @@ _CSV_SUFFIX = ".csv"
 # The csv module refuses any single field over 131,072 characters unless told otherwise;
 # a CSV "has no size limit" (see the README), so lift it (the largest a C long holds).
 _CSV_FIELD_LIMIT = 2**31 - 1
+
+
+def _active(workbook: Workbook) -> Worksheet:
+    """The workbook's active worksheet (``workbook.active`` may be ``None``, or a chart sheet)."""
+    sheet = workbook.active
+    if not isinstance(sheet, Worksheet):
+        raise InvalidFileError("the workbook has no active worksheet to use")
+    return sheet
 
 
 def _is_csv_path(path: Path) -> bool:
@@ -63,7 +72,7 @@ def _as_row(row: object) -> list[object]:
             f"({row!r}) — iterating it would split it into individual characters; "
             "wrap it in a list"
         )
-    return list(row)  # type: ignore[call-overload]
+    return list(cast("Iterable[object]", row))
 
 
 def _normalized(grid: list[list[object]]) -> list[list[object]]:
@@ -185,7 +194,7 @@ def create_workbook(path: str | Path, *, sheet: str = "Sheet") -> None:
     if not path.parent.is_dir():
         raise FileNotFoundError(f"the directory {path.parent} does not exist")
     workbook = Workbook()
-    workbook.active.title = sheet
+    _active(workbook).title = sheet
     try:
         atomic_save(workbook, path)
     finally:
@@ -218,6 +227,8 @@ def delete_workbook(path: str | Path) -> None:
         ValueError: *path* does not name an Excel workbook (.xlsx/.xlsm/.xltx/.xltm).
         FileNotFoundError: no file at *path*.
         FileLockedError: the file stayed locked (open in Excel) through every retry.
+        FileReadOnlyError: the file is read-only, so nothing is written (a kind of
+            ``FileLockedError``).
     """
     path = Path(path)
     if path.suffix.lower() not in _WORKBOOK_SUFFIXES:
@@ -269,13 +280,13 @@ def read_sheet(
             raise ValueError("sheet is not meaningful for a .csv file")
         if not path.exists():
             raise FileNotFoundError(f"no file at {path}")
-        rows: list[list[object]] = _read_csv_rows(path)
+        rows: list[list[object]] = [list(r) for r in _read_csv_rows(path)]
         fill: object = ""
     else:
         workbook = safe_load(path)
         try:
             if sheet is None:
-                worksheet = workbook.active
+                worksheet = _active(workbook)
             elif sheet in workbook.sheetnames:
                 worksheet = workbook[sheet]
             else:
@@ -283,7 +294,7 @@ def read_sheet(
 
             rows = []
             for raw_row in worksheet.iter_rows(values_only=True):
-                row = list(raw_row)
+                row: list[object] = list(raw_row)
                 while row and row[-1] is None:
                     row.pop()
                 rows.append(row)
@@ -370,7 +381,7 @@ def write_sheet(
 
     workbook = safe_load(path)
     try:
-        name = sheet if sheet is not None else workbook.active.title
+        name = sheet if sheet is not None else _active(workbook).title
         if mt.is_schema_name(name):
             raise mt.reserved_error(name, "cannot be written to")
         _refuse_case_clash(workbook, name)
@@ -475,7 +486,7 @@ def append_rows(
                 raise mt.reserved_error(sheet, "cannot be written to")
             _refuse_case_clash(workbook, sheet)
         if sheet is None:
-            worksheet = workbook.active
+            worksheet = _active(workbook)
         elif sheet in workbook.sheetnames:
             worksheet = workbook[sheet]
         else:

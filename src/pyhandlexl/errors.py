@@ -24,6 +24,14 @@ class FileLockedError(PyhandlexlError, OSError):
     """The file stayed locked (e.g. open in Excel) after every retry."""
 
 
+class FileReadOnlyError(FileLockedError):
+    """The file is read-only, so nothing was written.
+
+    A kind of :class:`FileLockedError` — code that already catches that keeps working —
+    but retrying can't help: the file has to be made writable first.
+    """
+
+
 class SheetNotFoundError(PyhandlexlError, KeyError):
     """No worksheet with the requested name exists in the workbook."""
 

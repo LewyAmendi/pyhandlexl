@@ -642,3 +642,14 @@ class TestReport:
     def test_is_frozen(self):
         with pytest.raises(AttributeError):
             MergeReport().cells_updated = 3  # type: ignore[misc]
+
+    def test_it_is_a_public_name_of_the_package_not_of_a_private_module(self):
+        import pickle
+
+        import pyhandlexl
+
+        assert pyhandlexl.MergeReport is MergeReport
+        assert MergeReport.__module__ == "pyhandlexl"
+        assert repr(MergeReport()).startswith("MergeReport(")
+        report = MergeReport(rows_added=("a",), conflicts=("cell b/c",))
+        assert pickle.loads(pickle.dumps(report)) == report
