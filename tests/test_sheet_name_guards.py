@@ -33,8 +33,10 @@ LOOKALIKES = [
     "_pyhandlexl_Tables",
     "_pyhandlexl_tables ",
     " _pyhandlexl_tables",
-    "\t_PyHandleXL_Tables\t",
 ]
+# Whitespace that is a control character makes the name invalid outright (SheetNameError),
+# before the reserved-name check is even reached — still refused, just by the earlier rule.
+CONTROL_LOOKALIKES = ["\t_PyHandleXL_Tables\t", "_pyhandlexl_tables\n"]
 
 
 @pytest.fixture
@@ -49,9 +51,18 @@ def _sheets(path) -> list[str]:
 
 
 class TestTheHelpers:
-    @pytest.mark.parametrize("name", [SCHEMA_SHEET, *LOOKALIKES])
+    @pytest.mark.parametrize("name", [SCHEMA_SHEET, *LOOKALIKES, *CONTROL_LOOKALIKES])
     def test_the_reserved_name_and_its_lookalikes_are_recognised(self, name):
         assert mt.is_schema_name(name)
+
+    @pytest.mark.parametrize("name", CONTROL_LOOKALIKES)
+    def test_a_lookalike_with_control_characters_is_refused_as_an_invalid_name(self, path, name):
+        from pyhandlexl import SheetNameError
+
+        before = _sheets(path)
+        with pytest.raises(SheetNameError):
+            create_sheet(path, name)
+        assert _sheets(path) == before
 
     @pytest.mark.parametrize(
         "name", ["Data", "_pyhandlexl_table", "_pyhandlexl_tables1", "x_pyhandlexl_tables", ""]
