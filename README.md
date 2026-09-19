@@ -913,9 +913,9 @@ Every write operation — `write_sheet`, `append_rows`, `create_sheet`,
 not exist yet. This applies to a `.csv` target exactly the same as `.xlsx`.
 
 A read-only file is never overwritten: a write to one raises `FileReadOnlyError`
-(a kind of `FileLockedError`) before anything happens — on every platform, not just Windows. A save keeps the
-file's permissions, and if the path is a symlink the file it points to is the one
-updated.
+(a kind of `FileLockedError`) before anything happens — on every platform, not just
+Windows. A save keeps the file's permissions, and if the path is a symlink the file it
+points to is the one updated.
 
 `create_workbook` only makes **`.xlsx`** files (`ValueError` for any other name, so a
 typo can't produce, say, an `.xlsx` inside `data.csv` that Excel refuses to open), and
@@ -1068,6 +1068,7 @@ source .venv/bin/activate        # Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 pytest
 ruff check . && ruff format --check .
+mypy
 ```
 
 ## License
