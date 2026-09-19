@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`Table.read` says which cell is at fault** when a header or row label is blank
+  (`table 'T' on sheet 'D' can't be read: the column header in cell C2 is blank …`),
+  instead of an anonymous `column headers must not be empty`.
+- **Every save now checks that the file it wrote is well-formed XML,** not just that
+  it opens as a workbook, before it replaces the original (the old check read
+  worksheets lazily, so a poisoned sheet passed it).
 - **The schema-rebuild warning now points at your code.** `SchemaRebuiltWarning`
   used to be attributed to a line inside pyhandlexl (`table.py`, `core.py`), so
   you couldn't tell which of your calls had triggered it — and Python's default
@@ -22,6 +28,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it and that a table whose marker is gone is not recovered.
 
 ### Fixed
+- **One bad string could make an entire workbook unreadable.** A string containing a
+  lone surrogate (`"\ud800"`) or `"\ufffe"`/`"\uffff"` was written without complaint;
+  the result could not be loaded again — not even the *other* sheets — while
+  `is_valid_xlsx` still said yes and the good file had already been replaced. A control
+  character raised a raw openpyxl `IllegalCharacterError` instead of a pyhandlexl
+  error. All of these now raise `CellTypeError` up front — in values, table names,
+  labels, headers and the corner alike.
+- **Values Excel silently changed or lost are refused:** `nan`/`inf` (became a blank
+  cell), strings over 32,767 characters (silently truncated — and a 32,768-character
+  *table name* left the table unfindable), dates before 1900-01-01 or after
+  9999-12-31 (`datetime.max` came back as the text `#VALUE!`), and ints beyond float
+  range. `CellTypeError`.
+- **Line breaks were stored differently on different platforms:** `"a\r\nb"` came
+  back as `"a\n\nb"` on Windows (a blank line gained) and `"a\nb"` on Linux. Data
+  cells now store `\n`, everywhere; a carriage return in a table's name, label,
+  header or corner (found by exact text) is refused.
+- **Macro-enabled workbooks lost their macros.** Any write to an `.xlsm`/`.xltm`
+  silently stripped `vbaProject.bin` and left a file Excel would not open. The macros
+  are now kept, and openpyxl's stray `Exception ignored … ZipFile.__del__` message
+  when handling one is silenced.
+- **`create_workbook` accepted any file name** — `data.csv`, `book.xlsm`, `book.xls`,
+  no extension — creating `.xlsx` content Excel refuses to open under that name (and
+  which `write_sheet` then mistook for a CSV). It now makes only `.xlsx` files, and
+  names a missing directory instead of a temporary file.
+- **A table with more than ~5,400 columns locked the whole workbook.** Its column
+  types are stored in one cell, which held at most 32,767 characters; the overflow was
+  cut off and every later operation died with `JSONDecodeError`. Types are now stored
+  compactly when they wouldn't fit; tables up to Excel's 16,383 data columns work.
+- **A rebuilt schema mistook data for tables.** A row label, header, corner, or data
+  value reading `TABLE NAME` inside a table became a phantom table (and cut the real
+  table's width short, so it stopped reading). Cells inside an already-found table
+  are no longer treated as markers.
+- **A bare string was silently split into characters** by `add_row`, `insert_row`,
+  `set_row`, `set_column`, `add_column`, `insert_column`, `write_sheet`,
+  `append_rows`, and the `pyhandlexl.grid` functions. It now raises `TypeError`, as
+  the `Table` constructor already did.
+- **On Linux and macOS a save overwrote read-only files, reset their permissions, and
+  replaced symlinks with regular files.** A save writes a new file and swaps it in,
+  which on POSIX needs write access to the *directory* only — so a `chmod 444` file
+  was silently replaced (Windows refused), its mode went back to the default, and a
+  symlinked workbook became an ordinary file while its real target stayed stale. A
+  read-only file (`.xlsx` or `.csv`) now raises `FileLockedError` on every platform
+  before anything is written, permissions are kept, and a symlink is followed so its
+  target is the file that is updated.
+- **A CSV containing a NUL byte raised a bare `_csv.Error` on Python 3.10** (3.11+
+  reads it). It is now a `ValueError` naming the line.
+- **Reading a CSV with a field over 131,072 characters raised `_csv.Error`,** despite
+  the README saying a CSV has no size limit.
+- **Sheet names with control characters** (or a leading/trailing apostrophe, which
+  Excel forbids) were accepted and then failed with a confusing `InvalidFileError`;
+  they raise `SheetNameError` now.
 - **A sheet name that collides with the reserved schema sheet's is refused.**
   `_PYHANDLEXL_TABLES` (any capitalisation, or with surrounding spaces) used to be
   accepted by `create_sheet`, `rename_sheet`, `write_sheet`, `append_rows` and

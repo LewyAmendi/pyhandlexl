@@ -14,10 +14,22 @@ from openpyxl import Workbook
 
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._multi_table import _to_label
-from pyhandlexl._safety import atomic_save, safe_delete, safe_load
+from pyhandlexl._safety import (
+    atomic_save,
+    ensure_writable,
+    keep_permissions,
+    resolve_target,
+    safe_delete,
+    safe_load,
+)
 from pyhandlexl.errors import SheetKindError, SheetNotFoundError
 from pyhandlexl.table import TableInfo
-from pyhandlexl.validate import check_cell_value, check_dimensions, check_sheet_name
+from pyhandlexl.validate import (
+    check_cell_value,
+    check_dimensions,
+    check_sheet_name,
+    normalize_newlines,
+)
 
 Orientation = Literal["rows", "columns"]
 SheetKind = Literal["table", "grid", "empty"]
@@ -25,6 +37,10 @@ SheetKind = Literal["table", "grid", "empty"]
 # Extensions openpyxl recognises as Excel workbooks.
 _WORKBOOK_SUFFIXES = frozenset({".xlsx", ".xlsm", ".xltx", ".xltm"})
 _CSV_SUFFIX = ".csv"
+
+# The csv module refuses any single field over 131,072 characters unless told otherwise;
+# a CSV "has no size limit" (see the README), so lift it (the largest a C long holds).
+_CSV_FIELD_LIMIT = 2**31 - 1
 
 
 def _is_csv_path(path: Path) -> bool:
@@ -38,9 +54,27 @@ def _check_cell_values(grid: list[list[object]]) -> None:
             check_cell_value(value)
 
 
+def _as_row(row: object) -> list[object]:
+    """One row of a grid as a list, refusing a bare ``str``/``bytes`` — which would be
+    silently split into single characters (``["hello"]`` is one row, not five cells)."""
+    if isinstance(row, (str, bytes)):
+        raise TypeError(
+            f"each row must be a sequence of values, not a single {type(row).__name__} "
+            f"({row!r}) — iterating it would split it into individual characters; "
+            "wrap it in a list"
+        )
+    return list(row)  # type: ignore[call-overload]
+
+
+def _normalized(grid: list[list[object]]) -> list[list[object]]:
+    """*grid* with every string's line breaks stored the way Excel stores them (see
+    :func:`~pyhandlexl.validate.normalize_newlines`)."""
+    return [[normalize_newlines(value) for value in row] for row in grid]
+
+
 def _checked_grid(rows: Iterable[Iterable[object]]) -> list[list[object]]:
     """Materialise *rows* into a grid, raising CellTypeError on any bad value."""
-    grid = [list(row) for row in rows]
+    grid = [_as_row(row) for row in rows]
     _check_cell_values(grid)
     return grid
 
@@ -65,8 +99,19 @@ def _refuse_case_clash(workbook: Workbook, name: str, *, ignoring: str | None = 
 
 
 def _read_csv_rows(path: Path) -> list[list[str]]:
-    with path.open(newline="", encoding="utf-8-sig") as f:
-        return [list(row) for row in csv.reader(f)]
+    previous = csv.field_size_limit(_CSV_FIELD_LIMIT)
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            try:
+                return [list(row) for row in reader]
+            except csv.Error as error:
+                # e.g. a NUL byte on Python 3.10 (3.11+ reads it): name the line
+                raise ValueError(
+                    f"{path} is not a readable CSV (line {reader.line_num}): {error}"
+                ) from error
+    finally:
+        csv.field_size_limit(previous)
 
 
 def _write_csv_atomic(
@@ -74,12 +119,15 @@ def _write_csv_atomic(
 ) -> None:
     """Write *grid* to *path* as CSV, stringifying every value (``None`` becomes an
     empty field), replacing any existing content atomically."""
+    path = resolve_target(path)
+    ensure_writable(path)
     tmp = path.parent / f".{path.stem}.{token_hex(6)}.tmp.csv"
     try:
         with tmp.open("w", newline="", encoding=encoding) as f:
             writer = csv.writer(f)
             for row in grid:
                 writer.writerow("" if value is None else str(value) for value in row)
+        keep_permissions(path, tmp)
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
@@ -117,14 +165,25 @@ def create_workbook(path: str | Path, *, sheet: str = "Sheet") -> None:
     ``append_rows``, ``create_sheet``, and ``Table.write`` all require the file
     to exist already.
 
+    Only ``.xlsx`` files can be created: a workbook saved under ``.xlsm``,
+    ``.xltx``, ``.csv``, ``.xls`` (or anything else) would hold ``.xlsx`` content
+    Excel refuses to open under that name.
+
     Raises:
         FileExistsError: something is already at *path*.
+        FileNotFoundError: the directory *path* would go in does not exist.
         SheetNameError: *sheet* is not a valid worksheet name.
+        ValueError: *path* does not end in ``.xlsx``.
     """
     check_sheet_name(sheet)
     path = Path(path)
+    if path.suffix.lower() != ".xlsx":
+        shown = path.suffix or "a file with no extension"
+        raise ValueError(f"create_workbook only makes .xlsx files, not {shown!r}: {path}")
     if path.exists():
         raise FileExistsError(f"{path} already exists")
+    if not path.parent.is_dir():
+        raise FileNotFoundError(f"the directory {path.parent} does not exist")
     workbook = Workbook()
     workbook.active.title = sheet
     try:
@@ -290,7 +349,7 @@ def write_sheet(
         raise ValueError(f"orientation must be 'rows' or 'columns', got {orientation!r}")
 
     path = Path(path)
-    grid = [list(row) for row in rows]
+    grid = [_as_row(row) for row in rows]
     if orientation == "columns":
         grid = [list(column) for column in zip_longest(*grid, fillvalue=None)]
 
@@ -303,6 +362,7 @@ def write_sheet(
         return
 
     _check_cell_values(grid)
+    grid = _normalized(grid)
     check_dimensions(len(grid), max((len(row) for row in grid), default=0))
 
     if sheet is not None:
@@ -391,7 +451,7 @@ def append_rows(
             existing worksheet's name only by capitalisation.
     """
     path = Path(path)
-    grid = [list(row) for row in rows]
+    grid = [_as_row(row) for row in rows]
     if not grid:
         return
 
@@ -404,6 +464,7 @@ def append_rows(
         return
 
     _check_cell_values(grid)
+    grid = _normalized(grid)
     if sheet is not None:
         check_sheet_name(sheet)
 

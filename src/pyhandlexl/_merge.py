@@ -27,6 +27,7 @@ from datetime import date, datetime, time, timedelta
 
 from pyhandlexl.column_type import ColumnType
 from pyhandlexl.style import TableStyle
+from pyhandlexl.validate import normalize_newlines
 
 _MISSING = object()
 _TOLERANCE = timedelta(milliseconds=1)  # Excel's date/time storage rounds sub-millisecond digits
@@ -118,6 +119,8 @@ def same_value(a: object, b: object) -> bool:
         return abs(_seconds(a) - _seconds(b)) < _TOLERANCE.total_seconds()
     if kind == "timedelta":
         return abs(a - b) < _TOLERANCE
+    if kind == "str":  # a carriage return is stored as a newline
+        return a == b or normalize_newlines(a) == normalize_newlines(b)
     return a == b
 
 

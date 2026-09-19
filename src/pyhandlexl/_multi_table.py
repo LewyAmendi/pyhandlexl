@@ -26,6 +26,7 @@ from datetime import datetime
 
 from openpyxl.comments import Comment
 from openpyxl.styles import Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 from pyhandlexl._merge import Snapshot
 from pyhandlexl.column_type import ColumnType
@@ -36,6 +37,7 @@ from pyhandlexl.errors import (
     TableNotFoundError,
 )
 from pyhandlexl.style import TableStyle
+from pyhandlexl.validate import MAX_CELL_CHARS
 
 SCHEMA_SHEET = "_pyhandlexl_tables"
 MARKER = "TABLE NAME"
@@ -146,11 +148,33 @@ def _style_from_json(value: str) -> TableStyle:
     return TableStyle(**json.loads(value))
 
 
+# One letter per column type, for tables so wide that the readable JSON list wouldn't fit in a
+# single cell (over ~5,000 columns): a cell holds at most MAX_CELL_CHARS characters and a longer
+# string is silently truncated, which used to leave a schema that no longer parsed — and locked
+# every operation on the whole workbook out with a JSONDecodeError.
+_TYPE_LETTER = {
+    ColumnType.ANY: "a",
+    ColumnType.TEXT: "t",
+    ColumnType.NUMBER: "n",
+    ColumnType.BOOLEAN: "b",
+    ColumnType.DATE: "d",
+    ColumnType.TIME: "m",
+    ColumnType.DURATION: "u",
+}
+_LETTER_TYPE = {letter: column_type for column_type, letter in _TYPE_LETTER.items()}
+_COMPACT_PREFIX = "~"
+
+
 def _column_types_to_json(column_types: list[ColumnType]) -> str:
-    return json.dumps([ct.value for ct in column_types], separators=(",", ":"))
+    text = json.dumps([ct.value for ct in column_types], separators=(",", ":"))
+    if len(text) <= MAX_CELL_CHARS:
+        return text
+    return _COMPACT_PREFIX + "".join(_TYPE_LETTER[ct] for ct in column_types)
 
 
 def _column_types_from_json(value: str) -> list[ColumnType]:
+    if value.startswith(_COMPACT_PREFIX):
+        return [_LETTER_TYPE[letter] for letter in value[len(_COMPACT_PREFIX) :]]
     return [ColumnType(v) for v in json.loads(value)]
 
 
@@ -281,6 +305,47 @@ def _find_markers(workbook) -> list[tuple[str, int, int, str]]:
                     if isinstance(name, str) and name:
                         found.append((sheet_name, cell.row, cell.column, name))
     return found
+
+
+def _genuine_markers(
+    workbook, markers: list[tuple[str, int, int, str]]
+) -> list[tuple[str, int, int, str]]:
+    """Drop cells that read ``TABLE NAME`` but sit inside a table rather than start one.
+
+    A row label (or header, or data cell) that happens to say ``TABLE NAME`` next to a
+    non-blank cell looks exactly like a marker. Left in, it becomes a phantom table and
+    also cuts the real table's width short, so the real one stops reading. Tables on a
+    sheet all start on the same row (row 1, unless someone inserted rows above them all
+    by hand), so the markers on that top row are taken as real first; any other marker
+    counts only if it lies outside every table already accepted.
+    """
+    by_sheet: dict[str, list[tuple[str, int, int, str]]] = {}
+    for marker in markers:
+        by_sheet.setdefault(marker[0], []).append(marker)
+
+    def region(ws, row: int, col: int, next_col: int | None) -> tuple[int, int, int, int]:
+        n_cols = _infer_width(ws, row, col, next_col)
+        n_rows = _infer_height(ws, row, col, n_cols)
+        return row, row + n_rows + 1, col, col + n_cols
+
+    kept: set[tuple[str, int, int, str]] = set()
+    for sheet_name, found in by_sheet.items():
+        ws = workbook[sheet_name]
+        top = min(row for _, row, _, _ in found)
+        first = sorted((m for m in found if m[1] == top), key=lambda m: m[2])
+        rest = sorted((m for m in found if m[1] != top), key=lambda m: (m[1], m[2]))
+        regions = []
+        for i, (_, row, col, _) in enumerate(first):
+            kept.add(first[i])
+            next_col = first[i + 1][2] if i + 1 < len(first) else None
+            regions.append(region(ws, row, col, next_col))
+        for marker in rest:
+            _, row, col, _ = marker
+            if any(r0 <= row <= r1 and c0 <= col <= c1 for r0, r1, c0, c1 in regions):
+                continue
+            kept.add(marker)
+            regions.append(region(ws, row, col, None))
+    return [m for m in markers if m in kept]
 
 
 def _infer_width(ws, anchor_row: int, anchor_col: int, next_anchor_col: int | None) -> int:
@@ -463,7 +528,7 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
     Emits nothing, and returns an empty dict, if the scan finds no markers
     at all (the ordinary case: the workbook genuinely has no tables yet).
     """
-    markers = _find_markers(workbook)
+    markers = _genuine_markers(workbook, _find_markers(workbook))
     if not markers:
         return {}
 
@@ -765,9 +830,27 @@ def read_snapshot(ws, entry: TableEntry) -> Snapshot:
     block = read_region(
         ws, entry.anchor_row + 1, entry.anchor_col, entry.n_rows + 1, entry.n_cols + 1
     )
+    headers = [_to_label(h) for h in block[0][1:]]
+    labels = [_to_label(row[0]) for row in block[1:]]
+    for j, header in enumerate(headers):
+        if header == "":
+            cell = f"{get_column_letter(entry.anchor_col + 1 + j)}{entry.anchor_row + 1}"
+            raise ValueError(
+                f"table {entry.name!r} on sheet {entry.sheet!r} can't be read: the column "
+                f"header in cell {cell} is blank, and every column needs a header — fill it "
+                "in (or delete the column) in Excel"
+            )
+    for i, label in enumerate(labels):
+        if label == "":
+            cell = f"{get_column_letter(entry.anchor_col)}{entry.anchor_row + 2 + i}"
+            raise ValueError(
+                f"table {entry.name!r} on sheet {entry.sheet!r} can't be read: the row "
+                f"label in cell {cell} is blank, and every row needs a label — fill it "
+                "in (or delete the row) in Excel"
+            )
     return Snapshot(
-        row_labels=[_to_label(row[0]) for row in block[1:]],
-        column_headers=[_to_label(h) for h in block[0][1:]],
+        row_labels=labels,
+        column_headers=headers,
         data=[list(row[1:]) for row in block[1:]],
         corner=_to_label(block[0][0]),
         style=entry.style,

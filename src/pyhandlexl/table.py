@@ -29,13 +29,14 @@ from pyhandlexl._merge import MergeReport, Snapshot, merge, same_state
 from pyhandlexl._safety import atomic_save, safe_load
 from pyhandlexl.column_type import ColumnType
 from pyhandlexl.errors import (
+    CellTypeError,
     ColumnTypeError,
     MergeConflictWarning,
     SheetKindError,
     SheetNotFoundError,
 )
 from pyhandlexl.style import TableStyle
-from pyhandlexl.validate import check_cell_value, check_dimensions
+from pyhandlexl.validate import check_cell_value, check_dimensions, normalize_newlines
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,17 @@ class TableInfo:
     sheet: str | None
     style: TableStyle
     column_types: dict[str, ColumnType]
+
+
+def _values(values: Iterable[object]) -> list[object]:
+    """A row or column's values as a list — refusing a bare ``str``/``bytes``, which
+    iterating would silently split into single characters."""
+    if isinstance(values, (str, bytes)):
+        raise TypeError(
+            f"values must be a sequence, not a single {type(values).__name__} ({values!r}) — "
+            "iterating it would split it into individual characters"
+        )
+    return list(values)
 
 
 def _conflict_message(name: str, report: MergeReport) -> str:
@@ -572,7 +584,7 @@ class Table:
 
     def set_row(self, row_label: str, values: Iterable[object]) -> None:
         """Replace the data row for *row_label*; ``len(values)`` must match the column count."""
-        new_row = list(values)
+        new_row = _values(values)
         i = self._row_index(row_label)
         expected = self._width()
         if len(new_row) != expected:
@@ -581,7 +593,7 @@ class Table:
 
     def set_column(self, column_header: str, values: Iterable[object]) -> None:
         """Replace the data column for *column_header*; ``len(values)`` must match the row count."""
-        new_col = list(values)
+        new_col = _values(values)
         j = self._column_index(column_header)
         if len(new_col) != len(self._data):
             raise ValueError(f"expected {len(self._data)} values, got {len(new_col)}")
@@ -617,7 +629,7 @@ class Table:
         """
         if not isinstance(position, int):
             raise TypeError(f"position must be int, got {type(position).__name__}: {position!r}")
-        new_row = list(values)
+        new_row = _values(values)
         self._check_new_row(label, new_row)
         n = len(self._data)
         if not 1 <= position <= n + 1:
@@ -655,7 +667,7 @@ class Table:
         """
         if not isinstance(position, int):
             raise TypeError(f"position must be int, got {type(position).__name__}: {position!r}")
-        new_col = list(values)
+        new_col = _values(values)
         self._check_new_column(header, new_col)
         n = len(self._column_headers)
         if not 1 <= position <= n + 1:
@@ -770,8 +782,23 @@ class Table:
         # every row label are always there to use.
         grid: list[list[object]] = [[self._corner, *self._column_headers]]
         for i, data_row in enumerate(self._data):
-            grid.append([self._row_labels[i], *data_row])
+            grid.append([self._row_labels[i], *(normalize_newlines(v) for v in data_row)])
         return grid
+
+    def _check_cells(self, assembled: list[list[object]]) -> None:
+        """CellTypeError for anything Excel can't store: the name (it lives in a cell too —
+        a name over 32,767 characters used to be silently cut short, leaving the table
+        unfindable) and every header, label, corner, and data value."""
+        check_cell_value(self._name)
+        for text in (self._name, self._corner, *self._row_labels, *self._column_headers):
+            if "\r" in text:  # these are looked up by their exact text: never rewrite them
+                raise CellTypeError(
+                    f"{text!r} contains a carriage return; names, labels, headers and the corner "
+                    "are identified by their exact text, and Excel stores line breaks as a newline"
+                )
+        for row in assembled:
+            for value in row:
+                check_cell_value(value)
 
     def _check_column_types(self) -> None:
         for j, column_type in enumerate(self._column_types):
@@ -844,9 +871,7 @@ class Table:
 
             try:
                 assembled = self._assemble()
-                for row in assembled:
-                    for value in row:
-                        check_cell_value(value)
+                self._check_cells(assembled)
                 self._check_column_types()
 
                 now = datetime.now(timezone.utc)
@@ -932,9 +957,7 @@ class Table:
             mt.check_not_exists(entries, self._name)
 
             assembled = self._assemble()
-            for row in assembled:
-                for value in row:
-                    check_cell_value(value)
+            self._check_cells(assembled)
             self._check_column_types()
 
             anchor_row, anchor_col = mt.find_placement(entries, sheet)

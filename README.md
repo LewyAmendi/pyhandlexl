@@ -251,6 +251,12 @@ columns: `1` inserts as the new first one; `len(...) + 1` inserts as the last
 case. Same constraints as `add_row`/`add_column` otherwise; a non-`int`
 position raises `TypeError`, an out-of-range one raises `IndexError`.
 
+The `values` you give `add_row`, `insert_row`, `set_row`, `set_column`,
+`add_column`, and `insert_column` must be a sequence: a bare string raises
+`TypeError` rather than being quietly split into one cell per character
+(`add_row("x", "ab")` is a mistake, not two cells). The same goes for the rows you
+hand to `write_sheet`/`append_rows` and the `pyhandlexl.grid` functions.
+
 You can also build a table up from nothing before placing it — `create()` is
 only needed once, for that first placement. `column_headers=` and `name=` are
 the only required arguments; data and row labels can start empty and grow
@@ -615,6 +621,23 @@ modification times, existed) is read with sensible defaults — the default
 style, unrestricted columns, `None` dates — and upgraded to the current layout
 by the next write.
 
+**Editing a table by hand.** Numeric and date headers or labels are read as text.
+A blank data cell is `None`. Duplicate labels or headers are tolerated on read.
+A *blank* header or label can't be read as a table, and the error says which cell
+(`... the column header in cell C2 is blank ...`) so you can fix it in Excel. Rows or
+columns inserted above or left of a table are healed; deleting the marker cell (or a
+column through it) makes the table unfindable. Formulas and error values (`#DIV/0!`)
+read as their text.
+
+A table may be any width Excel allows (16,383 data columns), and its column types
+are always recorded in full — for very wide tables in a compact form, since a cell
+holds at most 32,767 characters.
+
+**One limit of the rebuild:** a cell holding the words `TABLE NAME` is only mistaken
+for a table's marker when it sits at the very top of a sheet with text beside it — for
+example a *grid* sheet whose first row starts `TABLE NAME | hello`. Inside a real
+table (a label or data value that says it) it is recognised for what it is.
+
 ### One kind of data per sheet
 
 A worksheet holds **either** named tables **or** plain [grid data](#unorganised-data-the-grid-layout),
@@ -884,6 +907,20 @@ Every write operation — `write_sheet`, `append_rows`, `create_sheet`,
 `Table.create`, `Table.write` — raises `FileNotFoundError` if the file does
 not exist yet. This applies to a `.csv` target exactly the same as `.xlsx`.
 
+A read-only file is never overwritten: a write to one raises `FileLockedError`
+before anything happens — on every platform, not just Windows. A save keeps the
+file's permissions, and if the path is a symlink the file it points to is the one
+updated.
+
+`create_workbook` only makes **`.xlsx`** files (`ValueError` for any other name, so a
+typo can't produce, say, an `.xlsx` inside `data.csv` that Excel refuses to open), and
+the directory must already exist. Existing **`.xlsm`/`.xltm`** workbooks can be
+read and written and keep their macros; an `.xltx` template stays a template.
+Charts, merged cells, column widths, frozen panes, data validation, comments,
+hyperlinks, formulas and defined names elsewhere in a workbook are preserved when
+you write to it — but anything openpyxl itself can't keep (images without
+Pillow installed, form controls, slicers) is not.
+
 ## Sheet management
 
 ```python
@@ -915,7 +952,9 @@ file quietly end up with `data1` when you asked for `data`. (Changing just a
 sheet's own capitalisation — `rename_sheet(path, "log", "LOG")` — is fine.) The
 same goes for the reserved schema sheet's name, `_pyhandlexl_tables`, in *any*
 capitalisation, or with stray spaces around it: no call can create, rename to,
-write to, or otherwise use it (`SheetKindError`).
+write to, or otherwise use it (`SheetKindError`). A sheet name also can't contain a
+control character or a character XML can't hold, or begin or end with an
+apostrophe (`SheetNameError`).
 
 ## Safe writes
 
@@ -939,11 +978,33 @@ Excel forces a few small type changes on `write` → `read`:
 | `date(2026, 1, 1)` | `datetime(2026, 1, 1, 0, 0)` | Excel has no date-only type |
 | `""` (empty string) | `None` | Excel doesn't distinguish an empty string from a blank cell |
 | int larger than 2⁵³ | loses precision | float limit |
+| `datetime`/`time`/`timedelta` with microseconds | rounded to the millisecond | Excel keeps time to a millisecond |
+| `"a\r\nb"` or a lone `"\r"` in a data cell | `"a\nb"` | line breaks are stored as `\n`, the same on every platform |
+| `"=1+1"` (a `str` starting with `=`) | `"=1+1"`, but Excel treats it as a **formula** | see below |
 
-Rejected outright (`CellTypeError`): `Decimal` (would silently become `float`),
-timezone-aware `datetime`/`time` (Excel has no timezone), and any non-cell type
-(`list`, `dict`, `bytes`, `complex`, …). A `str` that looks numeric (`"007"`)
-stays a `str` in both directions.
+Rejected outright (`CellTypeError`), because a silent change or loss is worse than
+an error: `Decimal` (would silently become `float`), timezone-aware
+`datetime`/`time` (Excel has no timezone), and any non-cell type (`list`,
+`dict`, `bytes`, `complex`, …). Also refused, since Excel can't hold them:
+
+- a string containing a character an `.xlsx` file cannot contain — control
+  characters such as NUL, lone surrogates, `U+FFFE`/`U+FFFF`. A single one of
+  these makes the *whole workbook* unreadable, not just its cell;
+- a string longer than **32,767 characters**, which Excel would silently cut short;
+- `nan` and the infinities, which would silently become a blank cell;
+- an `int` too large to be a float;
+- a date before **1900-01-01** or after 9999-12-31 23:59:59.999;
+- a carriage return in a table's **name, row label, column header, or corner** —
+  those are found by their exact text, and Excel stores line breaks as `\n`
+  (a data cell just has its line breaks normalised, as the table above says).
+
+A `str` that looks numeric (`"007"`) stays a `str` in both directions.
+
+**A string that starts with `=` is stored as a formula.** That is how openpyxl treats
+it, and pyhandlexl neither evaluates nor validates formulas: `"=1+1"` reads back as
+the text `"=1+1"`, but Excel will calculate it. It also means a table read from a
+workbook that contains formulas writes them back as formulas, unchanged. There is
+currently no way to store literal text that begins with `=`.
 
 `check_cell_value(value)` runs this check on a single value if you want to
 validate before writing.
@@ -958,7 +1019,7 @@ All raised exceptions derive from `PyhandlexlError`:
 | `DimensionError` | `ValueError` | data exceeds Excel's 1,048,576 × 16,384 grid |
 | `SheetNotFoundError` | `KeyError` | no worksheet with that name |
 | `FileLockedError` | `OSError` | file stayed locked through every retry |
-| `CellTypeError` | `TypeError` | a value is not a type Excel can store |
+| `CellTypeError` | `TypeError` | a value is not something Excel can store faithfully (a foreign type, an XML-illegal or over-long string, `nan`/`inf`, an out-of-range date, …) |
 | `ColumnTypeError` | `TypeError` | a value doesn't match its column's `ColumnType` restriction |
 | `TableNotFoundError` | `KeyError` | no named table with that name, or its marker is gone |
 | `TableExistsError` | `ValueError` | a named table with that name already exists |

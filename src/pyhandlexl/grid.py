@@ -17,8 +17,19 @@ from collections.abc import Iterable
 Grid = list[list[object]]
 
 
+def _values(values: Iterable[object]) -> list[object]:
+    """A row or column's values as a list — refusing a bare ``str``/``bytes``, which
+    iterating would silently split into single characters."""
+    if isinstance(values, (str, bytes)):
+        raise TypeError(
+            f"values must be a sequence, not a single {type(values).__name__} ({values!r}) — "
+            "iterating it would split it into individual characters"
+        )
+    return list(values)
+
+
 def _copy(grid: Iterable[Iterable[object]]) -> Grid:
-    return [list(row) for row in grid]
+    return [_values(row) for row in grid]
 
 
 def _width(grid: Grid) -> int:
@@ -77,7 +88,7 @@ def set_row(grid: Iterable[Iterable[object]], row: int, values: Iterable[object]
     """Return a new grid with row *row* (1-based) replaced by *values*."""
     out = _copy(grid)
     _check_row(out, row)
-    out[row - 1] = list(values)
+    out[row - 1] = _values(values)
     return out
 
 
@@ -88,7 +99,7 @@ def set_column(grid: Iterable[Iterable[object]], col: int, values: Iterable[obje
     """
     out = _copy(grid)
     _check_column(out, col)
-    values = list(values)
+    values = _values(values)
     if len(values) != len(out):
         raise ValueError(f"expected {len(out)} values, got {len(values)}")
     for row, value in zip(out, values, strict=True):
@@ -102,7 +113,7 @@ def insert_row(grid: Iterable[Iterable[object]], row: int, values: Iterable[obje
     """Return a new grid with *values* inserted as row *row* (1-based)."""
     out = _copy(grid)
     _check_row(out, row, extra=1)
-    out.insert(row - 1, list(values))
+    out.insert(row - 1, _values(values))
     return out
 
 
@@ -113,7 +124,7 @@ def insert_column(grid: Iterable[Iterable[object]], col: int, values: Iterable[o
     """
     out = _copy(grid)
     _check_column(out, col, extra=1)
-    values = list(values)
+    values = _values(values)
     if len(values) != len(out):
         raise ValueError(f"expected {len(out)} values, got {len(values)}")
     for row, value in zip(out, values, strict=True):
@@ -126,7 +137,7 @@ def insert_column(grid: Iterable[Iterable[object]], col: int, values: Iterable[o
 def append_row(grid: Iterable[Iterable[object]], values: Iterable[object]) -> Grid:
     """Return a new grid with *values* added as the last row."""
     out = _copy(grid)
-    out.append(list(values))
+    out.append(_values(values))
     return out
 
 
@@ -137,7 +148,7 @@ def append_column(grid: Iterable[Iterable[object]], values: Iterable[object]) ->
     column for every row. ``len(values)`` must equal the number of rows.
     """
     out = pad(grid)
-    values = list(values)
+    values = _values(values)
     if len(values) != len(out):
         raise ValueError(f"expected {len(out)} values, got {len(values)}")
     for row, value in zip(out, values, strict=True):
