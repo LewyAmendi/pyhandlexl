@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-09-19
+
 ### Added
 - **`Table.write()` merges concurrent changes instead of overwriting them.**
   A `Table` remembers what it last saw on disk; if another writer changed the
@@ -36,13 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     re-saves the whole workbook). No file locking is used, since OS-level locking
     behaves differently across platforms and filesystems.
 
-### Fixed
-- **Workbooks written by older versions no longer fail to load.** A reserved
-  schema sheet from ≤ 0.9.2 (7 or 8 columns, before column types and
-  creation/modification times existed) raised `ValueError`. It now loads with
-  defaults (default style, unrestricted columns, `None` dates) and is upgraded to
-  the current layout by the next write.
-
 ### Changed
 - **Schema rebuild now infers column types instead of resetting them all
   to `ColumnType.ANY`.** When the reserved `_pyhandlexl_tables` sheet is
@@ -61,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     now say this instead of "cannot be recovered at all". Creation and
     modification times are still unrecoverable (there's no data to infer
     them from) and still come back `None`.
+
+### Fixed
+- **Workbooks written by older versions no longer fail to load.** A reserved
+  schema sheet from ≤ 0.9.2 (7 or 8 columns, before column types and
+  creation/modification times existed) raised `ValueError`. It now loads with
+  defaults (default style, unrestricted columns, `None` dates) and is upgraded to
+  the current layout by the next write.
 
 ## [0.9.3] — 2026-09-17
 
@@ -488,7 +490,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.0...v0.9.1

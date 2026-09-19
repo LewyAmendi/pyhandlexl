@@ -116,6 +116,9 @@ Table.read(path, name)
 
 Finds the table called `name` anywhere in the workbook — no need to know
 which sheet it's on. `TableNotFoundError` if there's no table by that name.
+The table remembers what it read, so a later `write()` can merge with changes
+another writer made in between — see
+[Two people editing the same table](#two-people-editing-the-same-table).
 
 Row labels, column headers, and the corner are always `str`. A numeric header
 cell (`2024`) is read back as `"2024"`; building a `Table` by hand with a
@@ -276,7 +279,9 @@ name is already taken, `SheetNotFoundError` if the sheet doesn't exist,
 been created, `write` reassembles its headers, labels, and data and writes it
 back to its tracked location — no `sheet=` needed, and `TableNotFoundError` if
 the table was never created (or has since been deleted). The file must
-already exist for either call — see [Files](#files).
+already exist for either call — see [Files](#files). If another writer changed
+the table since you read it, `write` merges their changes with yours instead of
+overwriting them — see the next section.
 
 ### Two people editing the same table
 
