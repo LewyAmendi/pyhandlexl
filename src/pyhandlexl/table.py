@@ -16,6 +16,7 @@ self-healing rules.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -24,10 +25,15 @@ from pathlib import Path
 from openpyxl.utils import coordinate_to_tuple
 
 from pyhandlexl import _multi_table as mt
-from pyhandlexl._multi_table import _to_label
+from pyhandlexl._merge import MergeReport, Snapshot, merge, same_state
 from pyhandlexl._safety import atomic_save, safe_load
 from pyhandlexl.column_type import ColumnType
-from pyhandlexl.errors import ColumnTypeError, SheetKindError, SheetNotFoundError
+from pyhandlexl.errors import (
+    ColumnTypeError,
+    MergeConflictWarning,
+    SheetKindError,
+    SheetNotFoundError,
+)
 from pyhandlexl.style import TableStyle
 from pyhandlexl.validate import check_cell_value, check_dimensions
 
@@ -68,6 +74,18 @@ class TableInfo:
     sheet: str | None
     style: TableStyle
     column_types: dict[str, ColumnType]
+
+
+def _conflict_message(name: str, report: MergeReport) -> str:
+    shown = report.conflicts[:10]
+    lines = [f"  - {conflict}" for conflict in shown]
+    if len(report.conflicts) > len(shown):
+        lines.append(f"  ... and {len(report.conflicts) - len(shown)} more")
+    return (
+        f"table {name!r} was changed on disk since it was read; write() merged those changes "
+        "with yours, and yours won where you both changed the same thing "
+        f"({len(report.conflicts)}):\n" + "\n".join(lines)
+    )
 
 
 class Table:
@@ -140,6 +158,13 @@ class Table:
         self._sheet: str | None = None
         self._created_at: datetime | None = None
         self._modified_at: datetime | None = None
+        # What this object last saw on disk, for merging concurrent writers — see write().
+        # Also which base row/column each current one descends from (None: added since),
+        # since a rename is the one change a diff can't tell from a delete plus an add.
+        self._base: Snapshot | None = None
+        self._row_origin: dict[str, str | None] = {}
+        self._column_origin: dict[str, str | None] = {}
+        self._last_merge: MergeReport | None = None
         self._validate()
 
     def _validate(self) -> None:
@@ -191,6 +216,9 @@ class Table:
         :class:`~pyhandlexl.errors.SchemaRebuiltWarning`. This can make a
         `read` write to the file, the same way a self-heal can.
 
+        The returned table remembers what it read, so a later :meth:`write`
+        can merge with anything another writer saved in between.
+
         Raises:
             TableNotFoundError: no such table exists, or its marker cannot be
                 found on its recorded sheet.
@@ -202,41 +230,31 @@ class Table:
             entry = mt.get_entry(entries, name)
             located = mt.verify_or_locate(workbook, entry)
             healed = located != entry
-
-            ws = workbook[located.sheet]
-            block = mt.read_region(
-                ws,
-                located.anchor_row + 1,
-                located.anchor_col,
-                located.n_rows + 1,
-                located.n_cols + 1,
-            )
-            corner = _to_label(block[0][0])
-            headers = [_to_label(h) for h in block[0][1:]]
-            labels = [_to_label(row[0]) for row in block[1:]]
-            data = [list(row[1:]) for row in block[1:]]
-            column_types = dict(zip(headers, located.column_types, strict=True))
-            table = cls(
-                data,
-                labels,
-                corner,
-                column_headers=headers,
-                name=name,
-                style=located.style,
-                column_types=column_types,
-            )
-            table._sheet = located.sheet
-            table._created_at = located.created_at
-            table._modified_at = located.modified_at
+            snapshot = mt.read_snapshot(workbook[located.sheet], located)
 
             if healed:
                 entries[name] = located
             if healed or not schema_existed:
                 mt.save_schema(workbook, entries)
                 atomic_save(workbook, path)
-            return table
         finally:
             workbook.close()
+
+        table = cls(
+            snapshot.data,
+            snapshot.row_labels,
+            snapshot.corner,
+            column_headers=snapshot.column_headers,
+            name=name,
+            style=located.style,
+            column_types=dict(zip(snapshot.column_headers, located.column_types, strict=True)),
+        )
+        table._sheet = located.sheet
+        table._created_at = located.created_at
+        table._modified_at = located.modified_at
+        table._set_base()
+
+        return table
 
     @classmethod
     def from_dict(
@@ -329,6 +347,42 @@ class Table:
         if not isinstance(column_type, ColumnType):
             raise TypeError(f"column_type must be a ColumnType, got {type(column_type).__name__}")
         self._column_types[self._column_index(header)] = column_type
+
+    @property
+    def last_merge(self) -> MergeReport | None:
+        """What the most recent :meth:`write` merged in from other writers, or ``None``.
+
+        ``None`` if that write found nothing had changed on disk since this table
+        was read (or if it hasn't written yet). Otherwise a
+        :class:`~pyhandlexl._merge.MergeReport`: the rows and columns other writers
+        added or removed, how many of your cells took their value, and any
+        ``conflicts`` where yours won (also raised as a ``MergeConflictWarning``).
+        """
+        return self._last_merge
+
+    def _snapshot(self) -> Snapshot:
+        return Snapshot(
+            list(self._row_labels),
+            list(self._column_headers),
+            [list(row) for row in self._data],
+            self._corner,
+            self._style,
+            list(self._column_types),
+        )
+
+    def _adopt(self, snapshot: Snapshot) -> None:
+        self._row_labels = list(snapshot.row_labels)
+        self._column_headers = list(snapshot.column_headers)
+        self._data = [list(row) for row in snapshot.data]
+        self._corner = snapshot.corner
+        self._style = snapshot.style
+        self._column_types = list(snapshot.column_types)
+
+    def _set_base(self) -> None:
+        """Remember the current state as what's on disk, for the next write's merge."""
+        self._base = self._snapshot()
+        self._row_origin = {label: label for label in self._row_labels}
+        self._column_origin = {header: header for header in self._column_headers}
 
     @property
     def info(self) -> TableInfo:
@@ -570,6 +624,7 @@ class Table:
             raise IndexError(f"position {position} is out of range for {n} rows (1..{n + 1})")
         self._data.insert(position - 1, new_row)
         self._row_labels.insert(position - 1, label)
+        self._row_origin[label] = None
 
     def _check_new_column(self, header: str, values: list[object]) -> None:
         if not isinstance(header, str):
@@ -609,12 +664,14 @@ class Table:
             data_row.insert(position - 1, value)
         self._column_headers.insert(position - 1, header)
         self._column_types.insert(position - 1, ColumnType.ANY)
+        self._column_origin[header] = None
 
     def drop_row(self, label: str) -> None:
         """Remove the row labeled *label*."""
         i = self._row_index(label)
         del self._data[i]
         del self._row_labels[i]
+        self._row_origin.pop(label, None)
 
     def drop_column(self, header: str) -> None:
         """Remove the column headed *header*.
@@ -627,6 +684,7 @@ class Table:
             raise ValueError("cannot drop the only remaining column")
         del self._column_headers[j]
         del self._column_types[j]
+        self._column_origin.pop(header, None)
         for data_row in self._data:
             del data_row[j]
 
@@ -640,6 +698,8 @@ class Table:
         if new != old and new in self._row_labels:
             raise ValueError(f"row label {new!r} already exists")
         self._row_labels[i] = new
+        if new != old:
+            self._row_origin[new] = self._row_origin.pop(old, None)
 
     def rename_column(self, old: str, new: str) -> None:
         """Change a column header; *new* must not already be in use (``ValueError``)."""
@@ -651,6 +711,8 @@ class Table:
         if new != old and new in self._column_headers:
             raise ValueError(f"column header {new!r} already exists")
         self._column_headers[j] = new
+        if new != old:
+            self._column_origin[new] = self._column_origin.pop(old, None)
 
     # --------------------------------------------------------------- display
 
@@ -736,7 +798,32 @@ class Table:
         otherwise), and must match any column type restriction
         (``ColumnTypeError`` otherwise) — both checks happen here, not when
         values are set.
+
+        **Concurrent writers.** If another writer changed this table on disk
+        since this object last read or wrote it, their changes are *merged*
+        with yours rather than overwritten: rows and columns they added appear
+        in your table, edits to different cells both survive, and both sides
+        appending just works. Where you both changed the very same thing
+        differently, yours wins and a ``MergeConflictWarning`` lists what it
+        overwrote. Afterwards this object holds the merged table, and
+        :attr:`last_merge` says what came in. A table that was never read or
+        created by this object has nothing to merge against, so it simply
+        overwrites.
+
+        The merge covers the time between your ``read`` and your ``write``. It
+        is not a lock: two writes landing at the very same instant can still
+        overwrite one another, since the check for changes and the save are
+        separate steps.
+
+        Raises:
+            TableNotFoundError: the table doesn't exist (or was deleted).
+            CellTypeError / ColumnTypeError: a value isn't allowed — checked
+                *after* merging, so a value someone else's new restriction
+                rules out is caught here too; nothing is written and this
+                object is left exactly as it was.
+            FileLockedError: the file stayed locked (open in Excel) through every retry.
         """
+        report: MergeReport | None = None
         workbook = safe_load(path)
         try:
             entries = mt.load_schema(workbook)
@@ -746,54 +833,72 @@ class Table:
             self._sheet = entry.sheet
             self._created_at = entry.created_at
 
-            assembled = self._assemble()
-            for row in assembled:
-                for value in row:
-                    check_cell_value(value)
-            self._check_column_types()
+            before = self._snapshot()
+            if self._base is not None:
+                theirs = mt.read_snapshot(workbook[entry.sheet], entry)
+                if not same_state(theirs, self._base):
+                    merged, report = merge(
+                        self._base, before, self._row_origin, self._column_origin, theirs
+                    )
+                    self._adopt(merged)
 
-            now = datetime.now(timezone.utc)
-            new_n_rows = len(self._data)
-            new_n_cols = self._width()
+            try:
+                assembled = self._assemble()
+                for row in assembled:
+                    for value in row:
+                        check_cell_value(value)
+                self._check_column_types()
 
-            growth = new_n_cols - entry.n_cols
-            if growth > 0:
-                neighbours = mt.tables_to_shift(entries, entry)
-                if neighbours:
-                    rightmost = max(e.anchor_col + e.width - 1 for e in neighbours) + growth
-                    check_dimensions(1, rightmost)
-                mt.shift_right(workbook, entries, entry, growth)
+                now = datetime.now(timezone.utc)
+                new_n_rows = len(self._data)
+                new_n_cols = self._width()
 
-            check_dimensions(entry.anchor_row + new_n_rows + 1, entry.anchor_col + new_n_cols)
+                growth = new_n_cols - entry.n_cols
+                if growth > 0:
+                    neighbours = mt.tables_to_shift(entries, entry)
+                    if neighbours:
+                        rightmost = max(e.anchor_col + e.width - 1 for e in neighbours) + growth
+                        check_dimensions(1, rightmost)
+                    mt.shift_right(workbook, entries, entry, growth)
 
-            ws = workbook[entry.sheet]
-            old_height, old_width = entry.height, entry.width
-            new_height, new_width = new_n_rows + 2, new_n_cols + 1
-            mt.clear_region(
-                ws,
-                entry.anchor_row,
-                entry.anchor_col,
-                max(old_height, new_height),
-                max(old_width, new_width),
-            )
-            mt.write_region(ws, entry.anchor_row, entry.anchor_col, [[mt.MARKER, self._name]])
-            mt.write_region(ws, entry.anchor_row + 1, entry.anchor_col, assembled)
+                check_dimensions(entry.anchor_row + new_n_rows + 1, entry.anchor_col + new_n_cols)
 
-            updated_entry = replace(
-                entry,
-                n_rows=new_n_rows,
-                n_cols=new_n_cols,
-                style=self._style,
-                column_types=self._column_types,
-                modified_at=now,
-            )
-            entries[self._name] = updated_entry
-            mt.paint_table(ws, updated_entry)
-            mt.save_schema(workbook, entries)
-            atomic_save(workbook, path)
-            self._modified_at = now
+                ws = workbook[entry.sheet]
+                old_height, old_width = entry.height, entry.width
+                new_height, new_width = new_n_rows + 2, new_n_cols + 1
+                mt.clear_region(
+                    ws,
+                    entry.anchor_row,
+                    entry.anchor_col,
+                    max(old_height, new_height),
+                    max(old_width, new_width),
+                )
+                mt.write_region(ws, entry.anchor_row, entry.anchor_col, [[mt.MARKER, self._name]])
+                mt.write_region(ws, entry.anchor_row + 1, entry.anchor_col, assembled)
+
+                updated_entry = replace(
+                    entry,
+                    n_rows=new_n_rows,
+                    n_cols=new_n_cols,
+                    style=self._style,
+                    column_types=list(self._column_types),
+                    modified_at=now,
+                )
+                entries[self._name] = updated_entry
+                mt.paint_table(ws, updated_entry)
+                mt.save_schema(workbook, entries)
+                atomic_save(workbook, path)
+            except BaseException:
+                self._adopt(before)  # leave this object exactly as the caller had it
+                raise
         finally:
             workbook.close()
+
+        self._modified_at = now
+        self._set_base()
+        self._last_merge = report
+        if report is not None and report.conflicts:
+            warnings.warn(MergeConflictWarning(_conflict_message(self._name, report)), stacklevel=2)
 
     def create(self, path: str | Path, sheet: str) -> None:
         """Place this table as a brand-new table on *sheet*.
@@ -810,6 +915,7 @@ class Table:
             CellTypeError: a data value is not a type Excel can store.
             ColumnTypeError: a data value doesn't match its column's type restriction.
             DimensionError: the placed table would exceed Excel's grid limits.
+            FileLockedError: the file stayed locked (open in Excel) through every retry.
         """
         workbook = safe_load(path)
         try:
@@ -849,7 +955,7 @@ class Table:
                 n_rows,
                 n_cols,
                 self._style,
-                self._column_types,
+                list(self._column_types),
                 created_at=now,
                 modified_at=now,
             )
@@ -857,11 +963,14 @@ class Table:
             mt.paint_table(ws, entry)
             mt.save_schema(workbook, entries)
             atomic_save(workbook, path)
-            self._sheet = sheet
-            self._created_at = now
-            self._modified_at = now
         finally:
             workbook.close()
+
+        self._sheet = sheet
+        self._created_at = now
+        self._modified_at = now
+        self._set_base()
+        self._last_merge = None
 
     # --------------------------------------------------------------- dunders
 

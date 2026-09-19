@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 from openpyxl import load_workbook
 
@@ -243,23 +245,155 @@ class TestRebuildStyle:
         assert TableStyle.DEFAULT.band_fill != ""
 
 
+def _rebuilt_types(path, name="T") -> dict[str, ColumnType]:
+    _delete_schema_sheet(path)
+    with pytest.warns(SchemaRebuiltWarning):
+        return Table.read(path, name).column_types
+
+
 class TestRebuildColumnTypes:
-    def test_column_type_restrictions_cannot_be_recovered(self, data_sheet):
-        # a known, inherent limit: nothing in a cell says "this column is
-        # restricted," only what happens to already be in it, so a rebuild
-        # always reports ColumnType.ANY for every column, even though this
-        # table was originally restricted.
+    """Column types are inferred from what each column currently holds —
+    nothing in a cell records a restriction itself, so this is best-effort."""
+
+    def test_each_native_type_is_inferred(self, data_sheet):
         Table(
-            data=[[1]],
+            data=[
+                [
+                    "a",
+                    1,
+                    True,
+                    dt.datetime(2026, 1, 1, 9, 0),
+                    dt.time(9, 0),
+                    dt.timedelta(hours=1),
+                ]
+            ],
+            column_headers=["text", "num", "flag", "when", "at", "took"],
+            row_labels=["r"],
+            name="T",
+        ).create(data_sheet, sheet="Data")
+        assert _rebuilt_types(data_sheet) == {
+            "text": ColumnType.TEXT,
+            "num": ColumnType.NUMBER,
+            "flag": ColumnType.BOOLEAN,
+            "when": ColumnType.DATE,
+            "at": ColumnType.TIME,
+            "took": ColumnType.DURATION,
+        }
+
+    def test_int_and_float_together_are_one_number_column(self, data_sheet):
+        Table(data=[[1], [2.5]], column_headers=["n"], row_labels=["x", "y"], name="T").create(
+            data_sheet, sheet="Data"
+        )
+        assert _rebuilt_types(data_sheet) == {"n": ColumnType.NUMBER}
+
+    def test_date_and_datetime_together_are_one_date_column(self, data_sheet):
+        Table(
+            data=[[dt.date(2026, 1, 1)], [dt.datetime(2026, 1, 2, 9, 0)]],
+            column_headers=["d"],
+            row_labels=["x", "y"],
+            name="T",
+        ).create(data_sheet, sheet="Data")
+        assert _rebuilt_types(data_sheet) == {"d": ColumnType.DATE}
+
+    def test_bool_is_not_mistaken_for_a_number(self, data_sheet):
+        Table(data=[[True], [False]], column_headers=["f"], row_labels=["x", "y"], name="T").create(
+            data_sheet, sheet="Data"
+        )
+        assert _rebuilt_types(data_sheet) == {"f": ColumnType.BOOLEAN}
+
+    def test_bool_mixed_with_numbers_is_any(self, data_sheet):
+        Table(data=[[1], [True]], column_headers=["m"], row_labels=["x", "y"], name="T").create(
+            data_sheet, sheet="Data"
+        )
+        assert _rebuilt_types(data_sheet) == {"m": ColumnType.ANY}
+
+    def test_mixed_column_is_any(self, data_sheet):
+        Table(data=[[1], ["x"]], column_headers=["m"], row_labels=["a", "b"], name="T").create(
+            data_sheet, sheet="Data"
+        )
+        assert _rebuilt_types(data_sheet) == {"m": ColumnType.ANY}
+
+    def test_blank_cells_are_ignored(self, data_sheet):
+        Table(
+            data=[[1], [None], [3]], column_headers=["n"], row_labels=["a", "b", "c"], name="T"
+        ).create(data_sheet, sheet="Data")
+        assert _rebuilt_types(data_sheet) == {"n": ColumnType.NUMBER}
+
+    def test_entirely_blank_column_is_any(self, data_sheet):
+        Table(
+            data=[[1, None], [2, None]],
+            column_headers=["n", "empty"],
+            row_labels=["a", "b"],
+            name="T",
+        ).create(data_sheet, sheet="Data")
+        assert _rebuilt_types(data_sheet) == {"n": ColumnType.NUMBER, "empty": ColumnType.ANY}
+
+    def test_table_with_no_rows_is_any_everywhere(self, data_sheet):
+        Table(column_headers=["a", "b"], name="T").create(data_sheet, sheet="Data")
+        assert _rebuilt_types(data_sheet) == {"a": ColumnType.ANY, "b": ColumnType.ANY}
+
+    def test_originally_restricted_column_is_recovered(self, data_sheet):
+        Table(
+            data=[[1], [2]],
+            column_headers=["a"],
+            row_labels=["x", "y"],
+            name="T",
+            column_types={"a": ColumnType.NUMBER},
+        ).create(data_sheet, sheet="Data")
+        assert _rebuilt_types(data_sheet) == {"a": ColumnType.NUMBER}
+
+    def test_originally_unrestricted_but_uniform_column_comes_back_restricted(self, data_sheet):
+        # the inherent ambiguity: nothing distinguishes "deliberately ANY,
+        # happens to hold one type" from "restricted to that type".
+        Table(data=[[1], [2]], column_headers=["a"], row_labels=["x", "y"], name="T").create(
+            data_sheet, sheet="Data"
+        )
+        assert _rebuilt_types(data_sheet) == {"a": ColumnType.NUMBER}
+
+    def test_originally_restricted_but_empty_column_is_lost(self, data_sheet):
+        Table(
+            data=[[None]],
             column_headers=["a"],
             row_labels=["x"],
             name="T",
             column_types={"a": ColumnType.NUMBER},
         ).create(data_sheet, sheet="Data")
+        assert _rebuilt_types(data_sheet) == {"a": ColumnType.ANY}
+
+    def test_inferred_types_always_admit_the_existing_data(self, data_sheet):
+        Table(
+            data=[[1, "x", True], [2.5, "y", False]],
+            column_headers=["n", "s", "b"],
+            row_labels=["r1", "r2"],
+            name="T",
+        ).create(data_sheet, sheet="Data")
         _delete_schema_sheet(data_sheet)
         with pytest.warns(SchemaRebuiltWarning):
             t = Table.read(data_sheet, "T")
-        assert t.column_types == {"a": ColumnType.ANY}
+        t.write(data_sheet)  # must not raise ColumnTypeError
+
+    def test_each_table_is_inferred_from_its_own_columns_only(self, data_sheet):
+        Table(data=[[1]], column_headers=["shared"], row_labels=["r"], name="A").create(
+            data_sheet, sheet="Data"
+        )
+        Table(data=[["x"]], column_headers=["shared"], row_labels=["r"], name="B").create(
+            data_sheet, sheet="Data"
+        )
+        _delete_schema_sheet(data_sheet)
+        with pytest.warns(SchemaRebuiltWarning):
+            a = Table.read(data_sheet, "A").column_types
+        b = Table.read(data_sheet, "B").column_types
+        assert a == {"shared": ColumnType.NUMBER}
+        assert b == {"shared": ColumnType.TEXT}
+
+    def test_persisted_after_the_rebuild(self, data_sheet):
+        Table(data=[[1]], column_headers=["n"], row_labels=["r"], name="T").create(
+            data_sheet, sheet="Data"
+        )
+        _delete_schema_sheet(data_sheet)
+        with pytest.warns(SchemaRebuiltWarning):
+            list_tables(data_sheet)  # rebuilds and persists
+        assert mt.load_schema(load_workbook(data_sheet))["T"].column_types == [ColumnType.NUMBER]
 
 
 class TestRebuildConflicts:

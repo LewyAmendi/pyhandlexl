@@ -27,6 +27,7 @@ from datetime import datetime
 from openpyxl.comments import Comment
 from openpyxl.styles import Border, Font, PatternFill, Side
 
+from pyhandlexl._merge import Snapshot
 from pyhandlexl.column_type import ColumnType
 from pyhandlexl.errors import SchemaRebuiltWarning, TableExistsError, TableNotFoundError
 from pyhandlexl.style import TableStyle
@@ -41,9 +42,11 @@ _SCHEMA_WARNING = (
     "deleted, pyhandlexl automatically rebuilds it next time a table is "
     "read, written, or listed, by scanning the workbook for table markers "
     "— position and size come back exact, but style is only a best-effort "
-    "reconstruction, and column-type restrictions and the creation/"
-    "modification times cannot be recovered at all (every column comes "
-    "back unrestricted, and both times come back unknown)."
+    "reconstruction; column types are only inferred from what each column "
+    "currently holds (so a restriction can be lost, or invented for a "
+    "column that was deliberately left unrestricted); and the creation/"
+    "modification times cannot be recovered at all (both come back "
+    "unknown)."
 )
 _SCHEMA_HEADER = (
     "name",
@@ -133,6 +136,9 @@ def load_schema(workbook) -> dict[str, TableEntry]:
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row or row[0] is None:
             continue
+        # Schemas written by older versions have fewer columns (7 before column
+        # types, 8 before creation/modification times) — read what's there and
+        # default the rest; the next save upgrades the sheet.
         (
             name,
             sheet,
@@ -144,7 +150,7 @@ def load_schema(workbook) -> dict[str, TableEntry]:
             column_types_json,
             created_at,
             modified_at,
-        ) = row[:10]
+        ) = (*row[:10], *([None] * (10 - len(row[:10]))))
         entries[name] = TableEntry(
             name,
             sheet,
@@ -152,8 +158,10 @@ def load_schema(workbook) -> dict[str, TableEntry]:
             int(anchor_col),
             int(n_rows),
             int(n_cols),
-            _style_from_json(style_json),
-            _column_types_from_json(column_types_json),
+            _style_from_json(style_json) if style_json else TableStyle.DEFAULT,
+            _column_types_from_json(column_types_json)
+            if column_types_json
+            else [ColumnType.ANY] * int(n_cols),
             _datetime_from_str(created_at),
             _datetime_from_str(modified_at),
         )
@@ -336,6 +344,50 @@ def _infer_style(ws, anchor_row: int, anchor_col: int, n_rows: int, n_cols: int)
     )
 
 
+_INFERABLE_TYPES = (
+    ColumnType.TEXT,
+    ColumnType.NUMBER,
+    ColumnType.BOOLEAN,
+    ColumnType.DATE,
+    ColumnType.TIME,
+    ColumnType.DURATION,
+)
+
+
+def _infer_column_types(
+    ws, anchor_row: int, anchor_col: int, n_rows: int, n_cols: int
+) -> list[ColumnType]:
+    """Best-effort ColumnType per data column, read back from what it holds.
+
+    A column whose non-blank values all belong to one Excel-native type
+    comes back restricted to it; a column that's empty, or mixes types,
+    comes back ``ColumnType.ANY``. Every value is exactly one native type
+    (``bool`` is never mistaken for a number, ``datetime`` and ``date`` are
+    both dates), so at most one restriction can match — there's no
+    ambiguity between two restrictions, only between a restriction and
+    ``ANY``. That one is real: a column that was deliberately left
+    unrestricted but happens to hold a single type is indistinguishable
+    from one that was restricted, so it comes back restricted.
+
+    Whatever this returns always admits the data currently in the table,
+    so writing it straight back never trips ``ColumnTypeError``.
+    """
+    first_data_row = anchor_row + 2
+    inferred = []
+    for j in range(n_cols):
+        present = [
+            value
+            for i in range(n_rows)
+            if (value := ws.cell(row=first_data_row + i, column=anchor_col + 1 + j).value)
+            is not None
+        ]
+        matches = (
+            [ct for ct in _INFERABLE_TYPES if all(ct.allows(v) for v in present)] if present else []
+        )
+        inferred.append(matches[0] if len(matches) == 1 else ColumnType.ANY)
+    return inferred
+
+
 def rebuild_schema(workbook) -> dict[str, TableEntry]:
     """Reconstruct the schema by scanning every sheet for table markers.
 
@@ -344,13 +396,14 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
     for why the marker-based scan can pin it down precisely. A table's style
     is read back from its cells on a best-effort basis (see
     :class:`~pyhandlexl.errors.SchemaRebuiltWarning`). A column's
-    :class:`~pyhandlexl.column_type.ColumnType` restriction can't be read
-    back from its cells at all — there's nothing in a cell that says "this
-    column is restricted," only what happens to already be in it — so every
-    rebuilt table comes back with every column reporting ``ColumnType.ANY``,
-    even if it was originally restricted. Likewise, nothing in a cell
-    records when the table was created or last modified, so both come back
-    ``None`` rather than a guessed value.
+    :class:`~pyhandlexl.column_type.ColumnType` restriction is *inferred*
+    from the values it currently holds (see :func:`_infer_column_types`) —
+    nothing in a cell says "this column is restricted," only what happens
+    to be in it, so this can lose a restriction (an empty or mixed column
+    comes back ``ANY``) or invent one (a column deliberately left
+    unrestricted, but holding one type, comes back restricted to it).
+    Nothing in a cell records when the table was created or last modified
+    either, so both come back ``None`` rather than a guessed value.
 
     A name claimed by more than one marker can't be safely resolved — that
     table is left out of the result (a warning names it) rather than
@@ -389,7 +442,7 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
             n_cols = _infer_width(ws, anchor_row, anchor_col, next_col)
             n_rows = _infer_height(ws, anchor_row, anchor_col, n_cols)
             style = _infer_style(ws, anchor_row, anchor_col, n_rows, n_cols)
-            column_types = [ColumnType.ANY] * n_cols
+            column_types = _infer_column_types(ws, anchor_row, anchor_col, n_rows, n_cols)
             entries[name] = TableEntry(
                 name,
                 sheet_name,
@@ -407,9 +460,11 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
         f"the {SCHEMA_SHEET} schema sheet was missing and has been rebuilt by scanning "
         f"the workbook; found {len(entries)} table(s): {sorted(entries)}. Sizes are "
         "exact; styles are a best-effort reconstruction from the cells themselves and "
-        "may not exactly match what was originally set; column type restrictions can't "
-        "be recovered at all and come back as ColumnType.ANY for every column; creation "
-        "and modification times can't be recovered either and come back as None.",
+        "may not exactly match what was originally set; column types are inferred from "
+        "the values each column currently holds, so a restriction can be lost (an empty "
+        "or mixed column comes back ColumnType.ANY) or invented (an unrestricted column "
+        "holding one type comes back restricted to it); creation and modification times "
+        "can't be recovered and come back as None.",
         SchemaRebuiltWarning,
         stacklevel=3,
     )
@@ -648,3 +703,21 @@ def shift_right(workbook, entries: dict[str, TableEntry], entry: TableEntry, gro
         moved = replace(e, anchor_col=new_col)
         entries[e.name] = moved
         paint_table(ws, moved)
+
+
+# ------------------------------------------------- reading a table's state
+
+
+def read_snapshot(ws, entry: TableEntry) -> Snapshot:
+    """The table at *entry*'s (already verified) position, as a file-independent snapshot."""
+    block = read_region(
+        ws, entry.anchor_row + 1, entry.anchor_col, entry.n_rows + 1, entry.n_cols + 1
+    )
+    return Snapshot(
+        row_labels=[_to_label(row[0]) for row in block[1:]],
+        column_headers=[_to_label(h) for h in block[0][1:]],
+        data=[list(row[1:]) for row in block[1:]],
+        corner=_to_label(block[0][0]),
+        style=entry.style,
+        column_types=list(entry.column_types),
+    )

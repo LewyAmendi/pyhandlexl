@@ -65,6 +65,19 @@ class SheetKindError(PyhandlexlError, ValueError):
     """
 
 
+class MergeConflictWarning(UserWarning):
+    """``Table.write`` found the table changed on disk since it was read, merged
+    those changes with yours, and had to overwrite some of them.
+
+    Not a ``PyhandlexlError`` — the write still succeeded. Changes that don't
+    overlap (different rows, different cells, both sides appending) merge
+    silently; this fires only where both sides changed the same thing
+    differently (the same cell, the same new row or column, an edit to
+    something the other side deleted, and so on). Your side always wins, and
+    the message lists what it overwrote.
+    """
+
+
 class SchemaRebuiltWarning(UserWarning):
     """The reserved schema sheet was missing and has been reconstructed by
     scanning the workbook for table markers.

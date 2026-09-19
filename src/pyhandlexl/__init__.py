@@ -1,6 +1,7 @@
 """pyhandlexl — read and write Excel .xlsx worksheets as organised, labelled tables."""
 
 from pyhandlexl import grid
+from pyhandlexl._merge import MergeReport
 from pyhandlexl.column_type import ColumnType
 from pyhandlexl.core import (
     append_rows,
@@ -28,6 +29,7 @@ from pyhandlexl.errors import (
     DimensionError,
     FileLockedError,
     InvalidFileError,
+    MergeConflictWarning,
     PyhandlexlError,
     SchemaRebuiltWarning,
     SheetKindError,
@@ -54,6 +56,8 @@ __all__ = [
     "DimensionError",
     "FileLockedError",
     "InvalidFileError",
+    "MergeConflictWarning",
+    "MergeReport",
     "PyhandlexlError",
     "SchemaRebuiltWarning",
     "SheetKindError",
