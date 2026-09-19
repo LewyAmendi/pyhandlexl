@@ -21,12 +21,17 @@ from __future__ import annotations
 
 import json
 import warnings
+from copy import copy
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
+from typing import Any, Literal, cast
 
+from openpyxl import Workbook
+from openpyxl.cell.cell import Cell
 from openpyxl.comments import Comment
 from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
 
 from pyhandlexl._merge import Snapshot
 from pyhandlexl.column_type import ColumnType
@@ -189,7 +194,7 @@ def _datetime_from_str(value: str) -> datetime | None:
 # ---------------------------------------------------------------- the schema
 
 
-def load_schema(workbook) -> dict[str, TableEntry]:
+def load_schema(workbook: Workbook) -> dict[str, TableEntry]:
     """Read the schema sheet from an open workbook.
 
     If the reserved sheet is missing, automatically reconstructs it by
@@ -208,6 +213,7 @@ def load_schema(workbook) -> dict[str, TableEntry]:
         # Schemas written by older versions have fewer columns (7 before column
         # types, 8 before creation/modification times) — read what's there and
         # default the rest; the next save upgrades the sheet.
+        cells: list[Any] = [*row[:10], *([None] * (10 - len(row[:10])))]
         (
             name,
             sheet,
@@ -219,7 +225,7 @@ def load_schema(workbook) -> dict[str, TableEntry]:
             column_types_json,
             created_at,
             modified_at,
-        ) = (*row[:10], *([None] * (10 - len(row[:10]))))
+        ) = cells
         entries[name] = TableEntry(
             name,
             sheet,
@@ -237,7 +243,7 @@ def load_schema(workbook) -> dict[str, TableEntry]:
     return entries
 
 
-def save_schema(workbook, entries: dict[str, TableEntry]) -> None:
+def save_schema(workbook: Workbook, entries: dict[str, TableEntry]) -> None:
     """Replace the schema sheet's contents in an open workbook.
 
     Marks the sheet with a red tab color and a warning comment on its
@@ -279,7 +285,7 @@ def save_schema(workbook, entries: dict[str, TableEntry]) -> None:
 # ------------------------------------------------------------- schema rebuild
 
 
-def _rgb_to_hex(color, default: str) -> str:
+def _rgb_to_hex(color: Any, default: str) -> str:
     """Best-effort: an openpyxl Color's ``.rgb`` as a plain 6-digit hex string.
 
     Falls back to *default* for anything that isn't a real ARGB string — a
@@ -291,7 +297,7 @@ def _rgb_to_hex(color, default: str) -> str:
     return default
 
 
-def _find_markers(workbook) -> list[tuple[str, int, int, str]]:
+def _find_markers(workbook: Workbook) -> list[tuple[str, int, int, str]]:
     """Every (sheet, row, col, name) marker found anywhere in the workbook."""
     found = []
     for sheet_name in workbook.sheetnames:
@@ -308,7 +314,7 @@ def _find_markers(workbook) -> list[tuple[str, int, int, str]]:
 
 
 def _genuine_markers(
-    workbook, markers: list[tuple[str, int, int, str]]
+    workbook: Workbook, markers: list[tuple[str, int, int, str]]
 ) -> list[tuple[str, int, int, str]]:
     """Drop cells that read ``TABLE NAME`` but sit inside a table rather than start one.
 
@@ -323,7 +329,9 @@ def _genuine_markers(
     for marker in markers:
         by_sheet.setdefault(marker[0], []).append(marker)
 
-    def region(ws, row: int, col: int, next_col: int | None) -> tuple[int, int, int, int]:
+    def region(
+        ws: Worksheet, row: int, col: int, next_col: int | None
+    ) -> tuple[int, int, int, int]:
         n_cols = _infer_width(ws, row, col, next_col)
         n_rows = _infer_height(ws, row, col, n_cols)
         return row, row + n_rows + 1, col, col + n_cols
@@ -348,7 +356,9 @@ def _genuine_markers(
     return [m for m in markers if m in kept]
 
 
-def _infer_width(ws, anchor_row: int, anchor_col: int, next_anchor_col: int | None) -> int:
+def _infer_width(
+    ws: Worksheet, anchor_row: int, anchor_col: int, next_anchor_col: int | None
+) -> int:
     """Data-column count for the table anchored at (anchor_row, anchor_col).
 
     Bounded exactly by the next table's anchor column when there is one on
@@ -367,7 +377,7 @@ def _infer_width(ws, anchor_row: int, anchor_col: int, next_anchor_col: int | No
     return last_real - anchor_col
 
 
-def _infer_height(ws, anchor_row: int, anchor_col: int, n_cols: int) -> int:
+def _infer_height(ws: Worksheet, anchor_row: int, anchor_col: int, n_cols: int) -> int:
     """Data-row count below the header row of the table anchored at (anchor_row, anchor_col).
 
     A row counts as part of the table if *any* cell across its width (label
@@ -396,7 +406,9 @@ def _infer_height(ws, anchor_row: int, anchor_col: int, n_cols: int) -> int:
     return last_real - header_row
 
 
-def _infer_style(ws, anchor_row: int, anchor_col: int, n_rows: int, n_cols: int) -> TableStyle:
+def _infer_style(
+    ws: Worksheet, anchor_row: int, anchor_col: int, n_rows: int, n_cols: int
+) -> TableStyle:
     """Best-effort TableStyle read back from a table's actual painted cells.
 
     Geometry (from _infer_width/_infer_height) is exact; this is not — it's
@@ -472,7 +484,7 @@ _INFERABLE_TYPES = (
 
 
 def _infer_column_types(
-    ws, anchor_row: int, anchor_col: int, n_rows: int, n_cols: int
+    ws: Worksheet, anchor_row: int, anchor_col: int, n_rows: int, n_cols: int
 ) -> list[ColumnType]:
     """Best-effort ColumnType per data column, read back from what it holds.
 
@@ -505,7 +517,7 @@ def _infer_column_types(
     return inferred
 
 
-def rebuild_schema(workbook) -> dict[str, TableEntry]:
+def rebuild_schema(workbook: Workbook) -> dict[str, TableEntry]:
     """Reconstruct the schema by scanning every sheet for table markers.
 
     Used automatically by :func:`load_schema` when the reserved sheet is
@@ -591,22 +603,22 @@ def rebuild_schema(workbook) -> dict[str, TableEntry]:
 # ------------------------------------------------------------- region access
 
 
-def read_region(ws, top: int, left: int, height: int, width: int) -> list[list[object]]:
+def read_region(ws: Worksheet, top: int, left: int, height: int, width: int) -> list[list[object]]:
     return [
         [ws.cell(row=r, column=c).value for c in range(left, left + width)]
         for r in range(top, top + height)
     ]
 
 
-def write_region(ws, top: int, left: int, grid: list[list[object]]) -> None:
+def write_region(ws: Worksheet, top: int, left: int, grid: list[list[object]]) -> None:
     # ws.cell(..., value=None) is a no-op in openpyxl (it means "no value given",
     # not "clear it"), so None must be assigned via .value directly.
     for i, row in enumerate(grid):
         for j, value in enumerate(row):
-            ws.cell(row=top + i, column=left + j).value = value
+            ws.cell(row=top + i, column=left + j).value = cast(Any, value)
 
 
-def clear_region(ws, top: int, left: int, height: int, width: int) -> None:
+def clear_region(ws: Worksheet, top: int, left: int, height: int, width: int) -> None:
     # Resetting only .value leaves a painted cell's style record behind, and
     # a cell with an explicit style but no value still counts as "used" —
     # Excel's own dimension tracking works the same way. Reassigning font/
@@ -616,7 +628,7 @@ def clear_region(ws, top: int, left: int, height: int, width: int) -> None:
     # makes a cell truly indistinguishable from one that was never touched.
     for r in range(top, top + height):
         for c in range(left, left + width):
-            cell = ws.cell(row=r, column=c)
+            cell = cast(Any, ws.cell(row=r, column=c))  # ._style isn't in the stubs
             cell.value = None
             cell._style = None
 
@@ -624,31 +636,44 @@ def clear_region(ws, top: int, left: int, height: int, width: int) -> None:
 # ----------------------------------------------------------------- painting
 
 
-def _side(is_thick: bool, is_medium: bool, color: str) -> Side:
-    weight = "thick" if is_thick else "medium" if is_medium else "thin"
-    return Side(style=weight, color=color)
+_Weight = Literal["thick", "medium", "thin"]
+SheetKind = Literal["table", "grid", "empty"]
 
 
-def _border_for(r: int, c: int, n_rows: int, n_cols: int, color: str) -> Border:
-    """The Border for the cell at local position (r, c) in an (n_rows x n_cols)
-    data body (r/c include the header row / label column at 0): thick around
-    the whole table, medium on the line separating header+labels from data,
-    thin everywhere else inside."""
-    return Border(
-        top=_side(r == 0, r == 1, color),
-        bottom=_side(r == n_rows, r == 0, color),
-        left=_side(c == 0, c == 1, color),
-        right=_side(c == n_cols, c == 0, color),
+def _weights(r: int, c: int, n_rows: int, n_cols: int) -> tuple[_Weight, _Weight, _Weight, _Weight]:
+    """The (top, bottom, left, right) line weights of the cell at local position (r, c) in an
+    (n_rows x n_cols) data body (r/c include the header row / label column at 0): thick around
+    the whole table, medium on the line separating header+labels from data, thin inside."""
+
+    def weight(is_thick: bool, is_medium: bool) -> _Weight:
+        return "thick" if is_thick else "medium" if is_medium else "thin"
+
+    return (
+        weight(r == 0, r == 1),
+        weight(r == n_rows, r == 0),
+        weight(c == 0, c == 1),
+        weight(c == n_cols, c == 0),
     )
 
 
-def _paint_border(cell, r: int, c: int, n_rows: int, n_cols: int, style: TableStyle) -> None:
+def _border_for(r: int, c: int, n_rows: int, n_cols: int, color: str) -> Border:
+    """The Border for the cell at local position (r, c) — see :func:`_weights`."""
+    top, bottom, left, right = _weights(r, c, n_rows, n_cols)
+    return Border(
+        top=Side(style=top, color=color),
+        bottom=Side(style=bottom, color=color),
+        left=Side(style=left, color=color),
+        right=Side(style=right, color=color),
+    )
+
+
+def _paint_border(cell: Cell, r: int, c: int, n_rows: int, n_cols: int, style: TableStyle) -> None:
     cell.border = (
         _border_for(r, c, n_rows, n_cols, style.border_color) if style.border_color else Border()
     )
 
 
-def _paint_header_like(cell, style: TableStyle) -> None:
+def _paint_header_like(cell: Cell, style: TableStyle) -> None:
     """Header row and label column share the same look."""
     cell.font = Font(
         name=style.header_font_name,
@@ -663,7 +688,7 @@ def _paint_header_like(cell, style: TableStyle) -> None:
     )
 
 
-def _paint_data(cell, style: TableStyle, banded: bool) -> None:
+def _paint_data(cell: Cell, style: TableStyle, banded: bool) -> None:
     cell.font = Font(
         name=style.data_font_name, size=style.data_font_size, color=style.data_font_color
     )
@@ -674,7 +699,7 @@ def _paint_data(cell, style: TableStyle, banded: bool) -> None:
     )
 
 
-def paint_table(ws, entry: TableEntry) -> None:
+def paint_table(ws: Worksheet, entry: TableEntry) -> None:
     """(Re)apply entry.style to the table's header row, label column, and data body.
 
     Always runs the full region, even for TableStyle.NONE — that's what
@@ -683,31 +708,64 @@ def paint_table(ws, entry: TableEntry) -> None:
     every create()/write() (so a shape change — a new row or column — is
     styled as part of the same pass that assembles it) and after every
     shift_right (so a table moved by a neighbour's growth keeps its look).
+
+    A table has only a few dozen distinct looks (header/label or data, banded or not, and
+    the border variants along its edges), but tens of thousands of cells. Building fresh
+    Font/Fill/Border objects for every cell — which openpyxl then hashes to find each one's
+    slot in the workbook's style table — was over 90% of the time to create or write a
+    table. So each distinct look is painted once the ordinary way, and its finished style
+    record is copied onto every other cell that shares it. The cells are always fresh or
+    cleared (see :func:`clear_region`), so the record is all a cell's style ever was.
     """
     style = entry.style
+    looks: dict[tuple[Any, ...], Any] = {}
+
+    def apply(cell: Any, record: Any) -> None:
+        # a date, time or duration was given its number format when its value was written,
+        # and nothing here paints one, so that one field stays the cell's own
+        number_format = cell._style.numFmtId if cell._style else 0  # cleared cells have none
+        cell._style = copy(record)
+        cell._style.numFmtId = number_format
+
+    def weights(r: int, c: int) -> tuple[_Weight, _Weight, _Weight, _Weight] | None:
+        return _weights(r, c, entry.n_rows, entry.n_cols) if style.border_color else None
+
+    def head(cell: Any, r: int, c: int) -> None:
+        key = ("head", weights(r, c))
+        record = looks.get(key)
+        if record is None:
+            _paint_header_like(cell, style)
+            _paint_border(cell, r, c, entry.n_rows, entry.n_cols, style)
+            looks[key] = copy(cell._style)
+        else:
+            apply(cell, record)
+
+    def data(cell: Any, r: int, c: int, banded: bool) -> None:
+        key = ("data", banded, weights(r, c))
+        record = looks.get(key)
+        if record is None:
+            _paint_data(cell, style, banded)
+            _paint_border(cell, r, c, entry.n_rows, entry.n_cols, style)
+            looks[key] = copy(cell._style)
+        else:
+            apply(cell, record)
+
     header_row = entry.anchor_row + 1
     for c in range(entry.width):
-        cell = ws.cell(row=header_row, column=entry.anchor_col + c)
-        _paint_header_like(cell, style)
-        _paint_border(cell, 0, c, entry.n_rows, entry.n_cols, style)
+        head(ws.cell(row=header_row, column=entry.anchor_col + c), 0, c)
 
     for r in range(1, entry.n_rows + 1):
         row = header_row + r
-        label_cell = ws.cell(row=row, column=entry.anchor_col)
-        _paint_header_like(label_cell, style)
-        _paint_border(label_cell, r, 0, entry.n_rows, entry.n_cols, style)
-
+        head(ws.cell(row=row, column=entry.anchor_col), r, 0)
         banded = bool(style.band_fill) and r % 2 == 0
         for c in range(1, entry.n_cols + 1):
-            data_cell = ws.cell(row=row, column=entry.anchor_col + c)
-            _paint_data(data_cell, style, banded)
-            _paint_border(data_cell, r, c, entry.n_rows, entry.n_cols, style)
+            data(ws.cell(row=row, column=entry.anchor_col + c), r, c, banded)
 
 
 # --------------------------------------------------------- marker verify/heal
 
 
-def verify_or_locate(workbook, entry: TableEntry) -> TableEntry:
+def verify_or_locate(workbook: Workbook, entry: TableEntry) -> TableEntry:
     """Confirm *entry*'s recorded position still holds its marker.
 
     If it does not, scan the recorded sheet for the marker/name pair and
@@ -762,7 +820,7 @@ def rename_sheet_in_entries(
     return {name: (replace(e, sheet=new) if e.sheet == old else e) for name, e in entries.items()}
 
 
-def sheet_kind(workbook, entries: dict[str, TableEntry], sheet: str) -> str:
+def sheet_kind(workbook: Workbook, entries: dict[str, TableEntry], sheet: str) -> SheetKind:
     """Whether *sheet* currently holds table data, grid data, or neither.
 
     ``"table"`` if any entry in *entries* points at it; otherwise ``"grid"``
@@ -796,7 +854,9 @@ def tables_to_shift(entries: dict[str, TableEntry], entry: TableEntry) -> list[T
     )
 
 
-def shift_right(workbook, entries: dict[str, TableEntry], entry: TableEntry, growth: int) -> None:
+def shift_right(
+    workbook: Workbook, entries: dict[str, TableEntry], entry: TableEntry, growth: int
+) -> None:
     """Move every table to the right of *entry* on its sheet further right by *growth* columns.
 
     Reads every affected region into memory before clearing or writing
@@ -825,7 +885,7 @@ def shift_right(workbook, entries: dict[str, TableEntry], entry: TableEntry, gro
 # ------------------------------------------------- reading a table's state
 
 
-def read_snapshot(ws, entry: TableEntry) -> Snapshot:
+def read_snapshot(ws: Worksheet, entry: TableEntry) -> Snapshot:
     """The table at *entry*'s (already verified) position, as a file-independent snapshot."""
     block = read_region(
         ws, entry.anchor_row + 1, entry.anchor_col, entry.n_rows + 1, entry.n_cols + 1

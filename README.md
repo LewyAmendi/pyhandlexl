@@ -41,9 +41,10 @@ Have a `.csv` file instead of `.xlsx`? `read_sheet`/`write_sheet`/
 data *between* CSV and `.xlsx` instead, see
 [Moving data between CSV and .xlsx](#moving-data-between-csv-and-xlsx).
 
-> **Under active development.** Usable today — expect new capabilities with each
-> release, and some API changes before it stabilises. See the
+> **Beta.** The features are in and tested; the API may still change in small ways
+> before 1.0, and every change is recorded in the
 > [changelog](https://github.com/LewyAmendi/pyhandlexl/blob/main/CHANGELOG.md).
+> Pin a version (`pyhandlexl~=0.9.6`) if you need it not to move.
 
 ## Install
 
@@ -51,7 +52,10 @@ data *between* CSV and `.xlsx` instead, see
 pip install pyhandlexl
 ```
 
-Requires Python 3.10+.
+Requires Python 3.10+ and [openpyxl](https://openpyxl.readthedocs.io/) 3.1.3 or newer
+(below 4), which pip installs for you. Tested on Linux, Windows and macOS, on Python
+3.10 to 3.14, against both the oldest and the newest openpyxl it allows. The package
+is fully typed (`py.typed`) and passes `mypy --strict`.
 
 ## Quickstart
 
@@ -758,9 +762,9 @@ append_rows("data.csv", [["x", "y"]])
 
 - **Every value becomes/comes back as a plain `str`** (`None` becomes `""`
   on write) — a CSV field has no other type, so nothing is inferred as a
-  number, date, or boolean. May change in a future release; for now it's
-  deliberately literal. `read_sheet`'s trimming/`pad` behavior still
-  applies, but pads with `""` instead of `None`.
+  number, date, or boolean. That is a promise, not a stopgap: a CSV stays
+  all text. `read_sheet`'s trimming/`pad` behavior still applies, but pads
+  with `""` instead of `None`.
 - **`sheet` must be `None`** — a `.csv` file has no sheets. Passing anything
   else raises `ValueError`.
 - **No size limit** — `DimensionError`/`CellTypeError` never apply to a
@@ -908,8 +912,8 @@ Every write operation — `write_sheet`, `append_rows`, `create_sheet`,
 `Table.create`, `Table.write` — raises `FileNotFoundError` if the file does
 not exist yet. This applies to a `.csv` target exactly the same as `.xlsx`.
 
-A read-only file is never overwritten: a write to one raises `FileLockedError`
-before anything happens — on every platform, not just Windows. A save keeps the
+A read-only file is never overwritten: a write to one raises `FileReadOnlyError`
+(a kind of `FileLockedError`) before anything happens — on every platform, not just Windows. A save keeps the
 file's permissions, and if the path is a symlink the file it points to is the one
 updated.
 
@@ -961,7 +965,7 @@ apostrophe (`SheetNameError`).
 
 Every write goes through the same steps:
 
-1. Refuse if the file is read-only (`FileLockedError`), and follow it if it is a
+1. Refuse if the file is read-only (`FileReadOnlyError`), and follow it if it is a
    symlink so the real file is the one updated.
 2. Save to a temporary file in the same directory.
 3. Verify it is a readable `.xlsx` **and that every XML part in it parses** — a
@@ -985,7 +989,7 @@ Excel forces a few small type changes on `write` → `read`:
 | int larger than 2⁵³ | loses precision | float limit |
 | `datetime`/`time`/`timedelta` with microseconds | rounded to the millisecond | Excel keeps time to a millisecond |
 | `"a\r\nb"` or a lone `"\r"` in a data cell | `"a\nb"` | line breaks are stored as `\n`, the same on every platform |
-| `"=1+1"` (a `str` starting with `=`) | `"=1+1"`, but Excel treats it as a **formula** | see below |
+| `"=1+1"` (a `str` starting with `=`) | `"=1+1"`, but Excel treats it as a **formula** | untested, unsupported: see below |
 
 Rejected outright (`CellTypeError`), because a silent change or loss is worse than
 an error: `Decimal` (would silently become `float`), timezone-aware
@@ -1005,11 +1009,17 @@ an error: `Decimal` (would silently become `float`), timezone-aware
 
 A `str` that looks numeric (`"007"`) stays a `str` in both directions.
 
-**A string that starts with `=` is stored as a formula.** That is how openpyxl treats
-it, and pyhandlexl neither evaluates nor validates formulas: `"=1+1"` reads back as
-the text `"=1+1"`, but Excel will calculate it. It also means a table read from a
-workbook that contains formulas writes them back as formulas, unchanged. There is
-currently no way to store literal text that begins with `=`.
+**A string that starts with `=` is stored as a formula — but formulas are not a
+supported feature.** That is how openpyxl treats it, and pyhandlexl neither evaluates,
+validates nor tests formulas: `"=1+1"` reads back as the text `"=1+1"`, but Excel will
+calculate it. It also means a table read from a workbook that contains formulas writes
+them back as formulas, unchanged. There is currently no way to store literal text that
+begins with `=`.
+
+> **Don't build on this.** Formula handling is untested behaviour that happens to fall
+> out of openpyxl, and it **may change or be removed in a future release** — for
+> example, strings starting with `=` might be stored as literal text instead. If you
+> need formulas, use openpyxl directly.
 
 `check_cell_value(value)` runs this check on a single value if you want to
 validate before writing.
@@ -1023,7 +1033,8 @@ All raised exceptions derive from `PyhandlexlError`:
 | `SheetNameError` | `ValueError` | invalid worksheet name |
 | `DimensionError` | `ValueError` | data exceeds Excel's 1,048,576 × 16,384 grid |
 | `SheetNotFoundError` | `KeyError` | no worksheet with that name |
-| `FileLockedError` | `OSError` | file stayed locked (open in Excel) through every retry, or is read-only |
+| `FileLockedError` | `OSError` | file stayed locked (open in Excel) through every retry |
+| `FileReadOnlyError` | `FileLockedError` | file is read-only, so nothing was written — retrying can't help; catching `FileLockedError` still covers it |
 | `CellTypeError` | `TypeError` | a value is not something Excel can store faithfully (a foreign type, an XML-illegal or over-long string, `nan`/`inf`, an out-of-range date, …) |
 | `ColumnTypeError` | `TypeError` | a value doesn't match its column's `ColumnType` restriction |
 | `TableNotFoundError` | `KeyError` | no named table with that name, or its marker is gone |

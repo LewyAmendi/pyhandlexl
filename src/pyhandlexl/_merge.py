@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from typing import cast
 
 from pyhandlexl.column_type import ColumnType
 from pyhandlexl.style import TableStyle
@@ -73,6 +74,11 @@ class MergeReport:
     conflicts: tuple[str, ...] = ()  # where yours overwrote theirs
 
 
+# It's public, so it lives at the package's top level as far as repr, help(), pickle
+# and the docs are concerned; this module is just where it is written.
+MergeReport.__module__ = "pyhandlexl"
+
+
 # --------------------------------------------------------------- comparison
 
 
@@ -112,13 +118,15 @@ def same_value(a: object, b: object) -> bool:
     if kind != _kind(b):
         return False
     if kind == "number":
-        return float(a) == float(b)
+        return float(cast("float", a)) == float(cast("float", b))
     if kind == "datetime":
-        return abs(_as_datetime(a) - _as_datetime(b)) < _TOLERANCE
+        return abs(_as_datetime(cast("date", a)) - _as_datetime(cast("date", b))) < _TOLERANCE
     if kind == "time":
-        return abs(_seconds(a) - _seconds(b)) < _TOLERANCE.total_seconds()
+        return abs(_seconds(cast("time", a)) - _seconds(cast("time", b))) < (
+            _TOLERANCE.total_seconds()
+        )
     if kind == "timedelta":
-        return abs(a - b) < _TOLERANCE
+        return abs(cast("timedelta", a) - cast("timedelta", b)) < _TOLERANCE
     if kind == "str":  # a carriage return is stored as a newline
         return a == b or normalize_newlines(a) == normalize_newlines(b)
     return a == b

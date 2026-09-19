@@ -17,7 +17,7 @@ from zipfile import BadZipFile, ZipFile
 
 from openpyxl import Workbook, load_workbook
 
-from pyhandlexl.errors import FileLockedError, InvalidFileError
+from pyhandlexl.errors import FileLockedError, FileReadOnlyError, InvalidFileError
 from pyhandlexl.validate import is_valid_xlsx
 
 _T = TypeVar("_T")
@@ -54,7 +54,7 @@ def ensure_writable(path: Path) -> None:
     while Windows refuses. This makes them agree, and refuses before doing any work.
     """
     if path.exists() and not os.access(path, os.W_OK):
-        raise FileLockedError(f"{path} is read-only (Permission denied); nothing was written")
+        raise FileReadOnlyError(f"{path} is read-only (Permission denied); nothing was written")
 
 
 def keep_permissions(original: Path, replacement: Path) -> None:

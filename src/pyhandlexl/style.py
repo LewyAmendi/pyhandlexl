@@ -12,6 +12,7 @@ extends to cover however much of it currently exists, with no separate
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 
 def _is_hex_color(value: str) -> bool:
@@ -30,6 +31,12 @@ class TableStyle:
     See ``TableStyle.DEFAULT``, ``.MINIMAL``, and ``.NONE`` for ready-made
     choices — construct your own ``TableStyle(...)`` for anything else.
     """
+
+    # the ready-made looks, assigned just after the class (a frozen dataclass can't hold
+    # instances of itself as defaults)
+    DEFAULT: ClassVar[TableStyle]
+    MINIMAL: ClassVar[TableStyle]
+    NONE: ClassVar[TableStyle]
 
     header_font_name: str = "Calibri"
     header_font_size: int = 11
