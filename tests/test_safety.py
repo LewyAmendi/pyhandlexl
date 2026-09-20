@@ -140,3 +140,75 @@ class TestAtomicSave:
             atomic_save(Workbook(), p)
 
         assert {f.name for f in tmp_path.iterdir()} == {"wb.xlsx"}
+
+
+class TestWellFormedCheck:
+    @staticmethod
+    def _archive(tmp_path: Path, part: bytes) -> Path:
+        from zipfile import ZipFile
+
+        path = tmp_path / "x.xlsx"
+        with ZipFile(path, "w") as z:
+            z.writestr("xl/worksheets/sheet1.xml", part)
+        return path
+
+    def test_a_real_workbook_is_well_formed(self, tmp_path):
+        p = tmp_path / "wb.xlsx"
+        _make_workbook(p)
+        assert safety._is_well_formed(p)
+
+    @pytest.mark.parametrize(
+        "part",
+        [
+            b'<?xml version="1.0"?><a><b></a>',  # mismatched tag
+            b'<?xml version="1.0"?><a><b>',  # truncated
+            b'<?xml version="1.0"?><x:a/>',  # a namespace prefix nobody declared
+            b'<?xml version="1.0"?><a>\x00</a>',  # a character XML can't hold
+            b'<?xml version="1.0"?><a>&undefined;</a>',
+            b"",
+        ],
+        ids=["mismatched", "truncated", "unbound-prefix", "illegal-char", "entity", "empty"],
+    )
+    def test_a_broken_part_is_refused(self, tmp_path, part):
+        assert not safety._is_well_formed(self._archive(tmp_path, part))
+
+    def test_a_well_formed_part_with_namespaces_is_accepted(self, tmp_path):
+        part = b'<?xml version="1.0"?><x:a xmlns:x="urn:x"><x:b y="1"/></x:a>'
+        assert safety._is_well_formed(self._archive(tmp_path, part))
+
+    def test_a_file_that_is_not_a_zip_is_refused(self, tmp_path):
+        path = tmp_path / "x.xlsx"
+        path.write_bytes(b"not a zip")
+        assert not safety._is_well_formed(path)
+
+
+class TestCleanupNeverHidesTheRealError:
+    def test_a_failed_save_raises_its_own_error_not_a_cleanup_error(self, tmp_path):
+        target = tmp_path / "wb.xlsx"
+        _make_workbook(target)
+
+        class Failing(Workbook):
+            handle = None
+
+            def save(self, filename):  # type: ignore[override]
+                # like a writer that dies part-way: the half-written file is still open
+                Failing.handle = open(filename, "wb")  # noqa: SIM115
+                raise RuntimeError("the writer failed")
+
+        try:
+            with pytest.raises(RuntimeError, match="the writer failed"):
+                atomic_save(Failing(), target)
+        finally:
+            if Failing.handle is not None:
+                Failing.handle.close()
+        load_workbook(target).close()  # the original is untouched and still opens
+
+    def test_discard_ignores_a_file_it_cannot_delete(self, tmp_path, monkeypatch):
+        stuck = tmp_path / "stuck.tmp.xlsx"
+        stuck.write_bytes(b"x")
+
+        def refuse(self, missing_ok=False):
+            raise PermissionError("still open")
+
+        monkeypatch.setattr(Path, "unlink", refuse)
+        safety._discard(stuck)  # must not raise

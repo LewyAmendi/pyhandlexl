@@ -57,6 +57,10 @@ Requires Python 3.10+ and [openpyxl](https://openpyxl.readthedocs.io/) 3.1.3 or 
 3.10 to 3.14, against both the oldest and the newest openpyxl it allows. The package
 is fully typed (`py.typed`) and passes `mypy --strict`.
 
+Optional extras, none of which the library needs: `pyhandlexl[pandas]` and
+`pyhandlexl[numpy]` for [analysis tools](#using-your-data-with-pandas-numpy-and-matplotlib),
+and `pyhandlexl[fast]` (lxml), which makes writes about a quarter faster.
+
 ## Quickstart
 
 `pyhandlexl` never creates a file or a table implicitly, so a full lifecycle
@@ -156,7 +160,7 @@ header, so both axes survive in a single structure. Build a table the other
 way with `Table.from_dict`:
 
 ```python
-Table.from_dict(table, corner="", *, name)
+Table.from_dict(table, corner="", *, name, style=None, column_types=None)
 ```
 
 ```python
@@ -403,6 +407,14 @@ TableStyle(
 )
 ```
 
+A write repaints only what changed. If the style and the table's shape are the
+same as on disk, nothing is repainted — only the values are rewritten — and adding
+or dropping rows or columns repaints just the old and the new last row and column
+(the only cells whose border changes; banding follows a row's position, not its
+data). So formatting you added by hand *inside* a table, such as a highlighted cell
+or a currency format, survives an ordinary write. Changing `t.style` repaints the whole
+table, and a number format follows the value's type: a date is always written as a date.
+
 Styling never touches `t.data` or equality — `t1 == t2` compares data,
 headers, labels, corner, and column types only, however differently the two
 are styled. It has no effect on `.csv` files — there's nothing there to style.
@@ -631,8 +643,9 @@ A blank data cell is `None`. Duplicate labels or headers are tolerated on read.
 A *blank* header or label can't be read as a table, and the error says which cell
 (`... the column header in cell C2 is blank ...`) so you can fix it in Excel. Rows or
 columns inserted above or left of a table are healed; deleting the marker cell (or a
-column through it) makes the table unfindable. Formulas and error values (`#DIV/0!`)
-read as their text.
+column through it) makes the table unfindable. Error values (`#DIV/0!`) read as their
+text, and so do formulas — with a `FormulaWarning` (see
+[Formulas are not supported](#formulas-are-not-supported)).
 
 A table may be any width Excel allows (16,383 data columns), and its column types
 are always recorded in full — for very wide tables in a compact form, since a cell
@@ -869,7 +882,8 @@ export_xl_to_csv("experiments.xlsx", "backup.csv", sheet="Log")
 existing `.xlsx` file at `path` — same target semantics as `write_sheet`
 (replaced if `sheet` already exists, created if it doesn't). Every field
 becomes a `str` cell: CSV has no other type, so nothing is inferred as a
-number, date, or boolean. `encoding` defaults to `"utf-8-sig"`, which also
+number, date, or boolean — and a field that starts with `=` is text, like every other
+field. `encoding` defaults to `"utf-8-sig"`, which also
 strips a leading byte-order mark transparently (common in CSVs saved by
 Excel on Windows).
 
@@ -888,6 +902,100 @@ otherwise — see [Files](#files)), and both check the path they were given —
 `import_csv_to_xl` also raises `DimensionError` if the CSV has more rows or
 columns than an `.xlsx` worksheet can hold, checked *before* anything is
 written.
+
+## Using your data with pandas, numpy and matplotlib
+
+Neither library is needed to use pyhandlexl, and it never imports either one until you
+call something below. Install what you use:
+
+```bash
+pip install "pyhandlexl[pandas]"     # DataFrames (brings numpy too)
+pip install "pyhandlexl[numpy]"      # arrays only
+```
+
+### A table as a DataFrame
+
+```python
+from pyhandlexl import Table
+
+t = Table.read("budget.xlsx", "Budget")
+df = t.to_dataframe()          # row labels -> index, headers -> columns, corner -> index name
+df["q1"].mean()
+df.plot(kind="bar")            # matplotlib, through pandas
+```
+
+`to_dataframe` returns a copy, so changing it doesn't change the table. A blank cell is
+`NaN` (`NaT` in a date or duration column). Each column's dtype is inferred from what it
+holds, and a column restricted to a [`ColumnType`](#restricting-a-columns-type) is settled
+to match: `DATE` as `datetime64`, `DURATION` as `timedelta64`, `BOOLEAN` as `bool` (or
+pandas' nullable `boolean` when the column has blanks), `NUMBER` as `int64` or `float64`.
+That last one follows Excel, which has one kind of number: a column of whole numbers comes
+back `int64` even if it went in as `float64`.
+
+### A DataFrame as a table
+
+```python
+result = df.assign(total=df["q1"] + df["q2"])
+Table.from_dataframe(result, name="Result").create("budget.xlsx", sheet="Analysis")
+```
+
+The index becomes the row labels and its name the corner; the columns become the headers.
+**Both must be strings**, since a table's labels and headers are text — a `DataFrame` with
+the default integer index is refused, with the fix in the message:
+
+```python
+df.index = df.index.astype(str)        # keep the numbers, as text
+df = df.set_index("id")                # or make one of the columns the labels
+```
+
+A `MultiIndex` is refused too (flatten it first with `reset_index()`). Values are stored as
+the plain Python values they hold, and every missing value — `NaN`, `NaT`, `pd.NA` — becomes
+a blank cell. `style=` and `column_types=` work as in the constructor, and
+`infer_column_types=True` restricts each column to the type its values have (numbers,
+booleans, dates, durations, times, text — a column of mixed or no values stays
+unrestricted), so a later edit that doesn't fit it is refused with `ColumnTypeError`.
+
+`Table.from_dataframe(...).write(path)` replaces a table that already exists. It builds a new
+in-memory table that has never read the file, so there is nothing to merge with: it
+overwrites.
+
+### A table as a numpy array
+
+```python
+arr = t.to_numpy()                       # the data, without the labels
+labels, headers = t.data.row_labels, t.data.column_headers
+```
+
+With no `dtype` the array gets the natural one for what the table holds: `int64`, `float64`,
+`bool`, `datetime64[us]` or `timedelta64[us]` when every cell is of that kind (a blank is
+`nan` or `NaT`), and `object` for text or a mixture (a blank stays `None`). Pass
+`dtype=float` (or any other) to choose; a blank can't be an integer, and the message says
+so.
+
+### Grids
+
+For a plain sheet — no row labels, no headers you name — `pyhandlexl.grid` has the same two
+conversions:
+
+```python
+from pyhandlexl import read_sheet, write_sheet, grid
+
+df = grid.to_dataframe(read_sheet("data.xlsx"))            # first row -> column names
+write_sheet("out.xlsx", grid.from_dataframe(df))           # column names -> first row
+write_sheet("out.xlsx", grid.from_dataframe(df, index=True))   # index -> first column
+```
+
+`header=False` treats every row as data. `write_sheet(path, df)` would not do: iterating a
+DataFrame yields its column names, not its rows.
+
+### Anywhere a value is written
+
+numpy and pandas values are accepted wherever a value is written — `set_cell`, `add_row`,
+`write_sheet`, `append_rows`, a `Table` built from an array — and stored as the plain value
+they hold: `np.int64(3)` as `3`, `np.bool_` as a boolean, `np.datetime64` and
+`pd.Timestamp` as a `datetime`, `np.timedelta64` and `pd.Timedelta` as a `timedelta`.
+**`nan`, `pd.NaT` and `pd.NA` become a blank cell** (`inf` is still refused: Excel can't
+store it). `check_cell_value` accepts the same.
 
 ## Files
 
@@ -925,6 +1033,13 @@ Charts, merged cells, column widths, frozen panes, data validation, comments,
 hyperlinks, formulas and defined names elsewhere in a workbook are preserved when
 you write to it — but anything openpyxl itself can't keep (images without
 Pillow installed, form controls, slicers) is not.
+
+**Formulas keep their formula, but not their calculated result.** Excel stores each
+formula's last result next to it; openpyxl can't keep those, so every write drops them
+for the whole workbook. Excel and LibreOffice recalculate when they open the file, so
+they show the numbers again; a tool that only reads the file (pandas, a preview pane,
+`openpyxl.load_workbook(data_only=True)`) sees blanks until Excel has opened and
+re-saved it.
 
 ## Sheet management
 
@@ -989,7 +1104,9 @@ Excel forces a few small type changes on `write` → `read`:
 | int larger than 2⁵³ | loses precision | float limit |
 | `datetime`/`time`/`timedelta` with microseconds | rounded to the millisecond | Excel keeps time to a millisecond |
 | `"a\r\nb"` or a lone `"\r"` in a data cell | `"a\nb"` | line breaks are stored as `\n`, the same on every platform |
-| `"=1+1"` (a `str` starting with `=`) | `"=1+1"`, but Excel treats it as a **formula** | untested, unsupported: see below |
+| `"=1+1"` (a `str` starting with `=`) | `"=1+1"`, stored as text | pyhandlexl has no formulas: see below |
+| `nan`, `float("nan")`, `pd.NaT`, `pd.NA` | `None` | Excel has no such values; every kind of missing value is an empty cell |
+| `np.int64(3)`, `np.bool_`, `pd.Timestamp`, … | `3`, `True`, `datetime`, … | numpy and pandas values are stored as the plain Python value they hold |
 
 Rejected outright (`CellTypeError`), because a silent change or loss is worse than
 an error: `Decimal` (would silently become `float`), timezone-aware
@@ -1000,7 +1117,7 @@ an error: `Decimal` (would silently become `float`), timezone-aware
   characters such as NUL, lone surrogates, `U+FFFE`/`U+FFFF`. A single one of
   these makes the *whole workbook* unreadable, not just its cell;
 - a string longer than **32,767 characters**, which Excel would silently cut short;
-- `nan` and the infinities, which would silently become a blank cell;
+- the infinities (`nan` is fine: it is stored as an empty cell);
 - an `int` too large to be a float;
 - a date before **1900-01-01** or after 9999-12-31 23:59:59.999;
 - a carriage return in a table's **name, row label, column header, or corner** —
@@ -1009,20 +1126,31 @@ an error: `Decimal` (would silently become `float`), timezone-aware
 
 A `str` that looks numeric (`"007"`) stays a `str` in both directions.
 
-**A string that starts with `=` is stored as a formula — but formulas are not a
-supported feature.** That is how openpyxl treats it, and pyhandlexl neither evaluates,
-validates nor tests formulas: `"=1+1"` reads back as the text `"=1+1"`, but Excel will
-calculate it. It also means a table read from a workbook that contains formulas writes
-them back as formulas, unchanged. There is currently no way to store literal text that
-begins with `=`.
+### Formulas are not supported
 
-> **Don't build on this.** Formula handling is untested behaviour that happens to fall
-> out of openpyxl, and it **may change or be removed in a future release** — for
-> example, strings starting with `=` might be stored as literal text instead. If you
-> need formulas, use openpyxl directly.
+pyhandlexl never writes a formula. A string is text, even one that starts with `=`:
+`"=1+1"` is stored as the text `=1+1` (with Excel's invisible quote prefix, so it stays
+text if someone edits the cell) and reads back as `"=1+1"`. That holds everywhere —
+data cells, grids, row labels, headers, table names, imported CSV fields.
+
+A workbook that already has formulas is another matter. Reading a table or a sheet that
+holds them gives you each formula's *text* (`"=A1+B1"`, not its result) and raises a
+`FormulaWarning`, because **writing that data back stores the text in place of the
+formula.** Formulas in ranges you never read and write, and on other sheets, are left as
+they are (though a write drops their calculated results — see [Files](#files)). If you
+need formulas, use openpyxl directly.
 
 `check_cell_value(value)` runs this check on a single value if you want to
-validate before writing.
+validate before writing. Three more helpers are public for the same reason:
+
+```python
+from pyhandlexl import check_cell_value, check_sheet_name, check_dimensions, is_valid_xlsx
+
+check_cell_value(value)         # CellTypeError if Excel can't store it faithfully
+check_sheet_name("My sheet")    # SheetNameError if it isn't a legal worksheet name
+check_dimensions(n_rows, n_cols)  # DimensionError if it won't fit on an Excel sheet
+is_valid_xlsx(path)             # True if the file opens as a workbook (never raises)
+```
 
 ## Errors
 
@@ -1035,19 +1163,54 @@ All raised exceptions derive from `PyhandlexlError`:
 | `SheetNotFoundError` | `KeyError` | no worksheet with that name |
 | `FileLockedError` | `OSError` | file stayed locked (open in Excel) through every retry |
 | `FileReadOnlyError` | `FileLockedError` | file is read-only, so nothing was written — retrying can't help; catching `FileLockedError` still covers it |
-| `CellTypeError` | `TypeError` | a value is not something Excel can store faithfully (a foreign type, an XML-illegal or over-long string, `nan`/`inf`, an out-of-range date, …) |
+| `CellTypeError` | `TypeError` | a value is not something Excel can store faithfully (a foreign type, an XML-illegal or over-long string, `inf`, an out-of-range date, …) |
 | `ColumnTypeError` | `TypeError` | a value doesn't match its column's `ColumnType` restriction |
 | `TableNotFoundError` | `KeyError` | no named table with that name, or its marker is gone |
 | `TableExistsError` | `ValueError` | a named table with that name already exists |
 | `SheetKindError` | `ValueError` | the sheet already holds the other kind of data (table vs. grid), or its name is the reserved schema sheet's (in any capitalisation) |
 | `InvalidFileError` | — | file is missing or not a readable `.xlsx` |
 
-`SchemaRebuiltWarning` and `MergeConflictWarning` are not in this table on
+`SchemaRebuiltWarning`, `MergeConflictWarning` and `FormulaWarning` are not in this table on
 purpose — they're `Warning`s (via Python's `warnings` module), not
 `PyhandlexlError`s. The operation that triggers them still succeeds; see
 [Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet) for
-when the first fires and [Two people editing the same table](#two-people-editing-the-same-table)
-for the second.
+when the first fires, [Two people editing the same table](#two-people-editing-the-same-table)
+for the second, and [Formulas are not supported](#formulas-are-not-supported) for the third.
+
+## Limitations
+
+What to know before relying on it, so none of it is a surprise:
+
+- **It is not a database.** There are no transactions and no locks. The
+  [merge on write](#two-people-editing-the-same-table) protects two people who edit at
+  different times; two saves landing in the same instant can still lose one of them.
+  Serialise writers yourself if that can happen.
+- **Every write loads and re-saves the whole workbook,** so its cost follows the size of
+  the *file*, not of your edit. Roughly, on an ordinary Windows machine, for a table of
+  4,000 rows × 8 columns: reading it takes about half a second, and editing one cell and
+  writing it back about 1.7 seconds. A small workbook takes milliseconds. It is meant for
+  thousands of rows, not hundreds of thousands — and for a plain grid, `append_rows` costs
+  only what the new rows cost. Installing [lxml](https://lxml.de/) (`pip install
+  "pyhandlexl[fast]"`) makes writes about a quarter faster; nothing else changes.
+- **The whole table is held in memory,** as Python objects.
+- **Excel must not have the file open on Windows** — a write retries for a moment, then
+  raises `FileLockedError`. On macOS and Linux nothing stops a save from replacing a file
+  that is open in Excel, so Excel's copy silently goes stale.
+- **Only Excel's data model.** Cells hold what Excel can store — text up to 32,767
+  characters, numbers, booleans, and dates and times without a time zone, to the
+  millisecond. See the [round-trip notes](#round-trip-notes) for the small changes that
+  forces. Formulas are not supported (see above), and neither are `Decimal` or a time zone.
+- **A sheet holds tables or a grid, not both,** and tables sit side by side starting at
+  row 1 with one empty column between them; you can't place one at an arbitrary cell.
+- **A write drops the calculated results of any formulas in the workbook** — the
+  formulas stay, and Excel or LibreOffice recalculate them on opening (see [Files](#files)).
+- **A `Table` object is not thread-safe.**
+- **Files are checked by reading them back with openpyxl,** not by opening them in Excel
+  or LibreOffice. The library refuses everything it knows would make Excel complain (an
+  over-long sheet name, an illegal character, a value Excel would cut short); if Excel
+  ever does complain about a file it wrote, that is a bug worth reporting.
+- **`.xlsx`, `.xlsm`, `.xltx`, `.xltm` and `.csv` only** — no `.xls`, no password-protected
+  workbooks.
 
 ## Not in scope
 

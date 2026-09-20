@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 
 from pyhandlexl import (
     ColumnType,
+    FormulaWarning,
     SchemaRebuiltWarning,
     Table,
     TableNotFoundError,
@@ -71,13 +72,17 @@ class TestValuesPeopleTypeIn:
         edit(path, lambda ws: ws.__setitem__("B3", None))
         assert Table.read(path, "T").data.rows == [[None, 2], [3, 4]]
 
-    def test_a_formula_reads_as_its_text_and_is_kept_when_written_back(self, path):
+    def test_a_formula_reads_as_its_text_with_a_warning_and_becomes_text_when_written_back(
+        self, path
+    ):
         edit(path, lambda ws: ws.__setitem__("B3", "=C3*2"))
-        table = Table.read(path, "T")
+        with pytest.warns(FormulaWarning, match="table 'T' holds 1 formula cell"):
+            table = Table.read(path, "T")
         assert table.read_cell(row="r1", column="a") == "=C3*2"
         table.set_cell(row="r2", column="a", value=99)
         table.write(path)
-        assert load_workbook(path)["D"]["B3"].value == "=C3*2"  # still a formula, not text
+        cell = load_workbook(path)["D"]["B3"]
+        assert cell.value == "=C3*2" and cell.data_type == "s"  # pyhandlexl has no formulas
 
     def test_an_error_value_reads_as_its_text(self, path):
         edit(path, lambda ws: ws.__setitem__("B3", "#DIV/0!"))

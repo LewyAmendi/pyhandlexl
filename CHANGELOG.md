@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Groundwork for 1.0: an audit of the public API, and a second round of speed-ups.
+
+### Changed (these can break existing code)
+- **`nan` is now a blank cell, not an error.** `nan`, `pd.NaT`, `pd.NA` and
+  `np.datetime64('NaT')` were refused (`CellTypeError`: Excel can't store them); they are
+  now stored as an empty cell and read back as `None`, which is what analysis data needs.
+  The infinities are still refused.
+- **Formulas are no longer supported — by design, for now.** openpyxl turns any string that
+  starts with `=` into a formula, and pyhandlexl used to leave it at that ("untested, may be
+  removed"). That was wrong in three ways: a row label, header, corner, table name or CSV
+  field like `=== NOTES ===` became a formula Excel would calculate and show as `#NAME?`
+  (or reject the file over, if it wasn't a valid one); `import_csv_to_xl`, documented as
+  "every field becomes a plain text cell", let a CSV plant a live `=HYPERLINK(…)`; and
+  a formula written in a table went stale, silently, when rows or columns moved. So now a
+  string is **always text, everywhere** — `"=1+1"` is stored as the text `=1+1`, with
+  Excel's quote prefix so it stays text if someone edits the cell — and it reads back
+  unchanged. Use openpyxl directly for formulas.
+- **Reading a workbook that holds real formulas warns.** `read_sheet`, `Table.read` and
+  `export_xl_to_csv` give a formula's *text* and raise the new **`FormulaWarning`**
+  (naming the cells and pointing at your call), because writing that data back stores the
+  text in place of the formula. A formula on another sheet, or outside the range you
+  read and write, is untouched. Before, such a table round-tripped with its formulas
+  intact.
+- **One name for a row's label and a column's header on every `Table` method.**
+  `read_row(row_label)`, `set_row(row_label, …)`, `read_column(column_header)` and
+  `set_column(column_header, …)` now take `label` / `header`, like `add_row`, `drop_row`,
+  `insert_row`, `add_column`, `drop_column` and `insert_column` always did. Positional
+  calls — which is how every documented example calls them — are unaffected.
+- **A missing worksheet says which.** `SheetNotFoundError` now reads
+  `no worksheet named 'Data'` (it was the bare name), and it and `TableNotFoundError`
+  print their message as it is instead of wrapped in the quotes `KeyError` adds. They
+  are still `KeyError`s.
+- **`repr(t.data)` no longer prints a whole big table.** A snapshot of more than 100
+  cells shows its shape (`TableData(4000 rows x 8 columns, corner='')`); a small one shows
+  its contents as before. (`rows` and `columns` hold the same cells twice, and the full
+  repr of a 2,000-row table was 60 KB.)
+
+### Added
+- **Use your data with pandas and numpy.** Optional extras (`pyhandlexl[pandas]`,
+  `pyhandlexl[numpy]`); the library still imports neither, and a test checks that.
+  - `Table.to_dataframe()` — row labels as the index (the corner is its name), headers as the
+    columns, blanks as `NaN`/`NaT`; a column restricted to a `ColumnType` is settled to the
+    matching dtype (`datetime64`, `timedelta64`, `bool` or nullable `boolean`).
+  - `Table.from_dataframe(df, *, name, style=None, column_types=None,
+    infer_column_types=False)` — the inverse. The index and the columns must be strings (a
+    table's labels are text): a non-string one is refused with a message that says how to
+    fix it, and so is a `MultiIndex`. `infer_column_types=True` restricts each column to the
+    type its values have.
+  - `Table.to_numpy(dtype=None)` — the data as a 2-D array, with the natural dtype
+    (`int64`, `float64`, `bool`, `datetime64[us]`, `timedelta64[us]`, else `object`).
+  - `grid.to_dataframe(grid, header=True)` and `grid.from_dataframe(df, header=True,
+    index=False)` for plain sheets.
+- **numpy and pandas values are accepted wherever a value is written** (`set_cell`, `add_row`,
+  `write_sheet`, `append_rows`, `check_cell_value`, …) and stored as the plain value they
+  hold — `np.int64` as `int`, `np.bool_` as `bool`, `np.datetime64`/`pd.Timestamp` as
+  `datetime`, `np.timedelta64`/`pd.Timedelta` as `timedelta`. Before, all of them but
+  `np.float64` were refused with `CellTypeError`.
+- `Table.from_dict(..., style=)`, like the constructor's.
+- A **`fast` extra**: `pip install "pyhandlexl[fast]"` installs lxml, which openpyxl
+  uses to write files about a quarter faster.
+- `tests/test_public_api.py` pins the public API's exact surface — every exported name,
+  method, property, field, exception base and signature — so from here on it can only
+  change on purpose.
+
+### Performance
+- **A write repaints only what changed.** With the style and shape unchanged nothing is
+  repainted (only values are rewritten); adding or dropping rows or columns repaints just
+  the old and the new last row and column, the only cells whose border changes. Editing a
+  cell of a 4,000 × 8 table now takes about 16% less time, and painting itself dropped
+  from ~0.4 s to under 10 ms. Openpyxl's own load and save are now about two thirds of a
+  write; the rest is ours. The result is cell-for-cell identical to a full repaint (a test
+  replays random sequences of edits — rows and columns added, dropped and inserted, values
+  of every type, style changes, a neighbouring table being shifted — both ways and
+  compares every cell).
+- **The well-formed-XML check on every save is four times faster** (a bare expat parser
+  instead of ElementTree building a tree nobody reads), with the same verdicts, including
+  for an undeclared namespace prefix.
+
+### Fixed
+- **`import_csv_to_xl`'s schema-rebuild warning pointed into the library,** at a line of
+  `core.py`, not at your call (it does its work through `write_sheet`, one frame deeper
+  than the depth the warning's location was computed for) — although the README says
+  the warning names the line of your code. It now does, and a test covers it with the
+  other operations.
+- **A save that failed part-way could report the wrong error.** On Windows the half-written
+  temporary file can still be open, so deleting it raised `PermissionError` and hid what
+  actually went wrong (with lxml installed, a bad string made openpyxl raise
+  `UnicodeEncodeError` mid-save and this got in the way). Cleanup is now best-effort.
+- A cell that keeps its style across a write could keep the number format its previous
+  value gave it — a number written over a date would have read back as a date. Number
+  formats are reset before each value is written. (Not reachable before, because every
+  write cleared every cell first.)
+
+### Documented
+- **A write drops the calculated results of formulas** (openpyxl can't keep them); the
+  formulas stay and Excel recalculates on opening. The README said formulas are
+  "preserved" without saying so.
+- A **Limitations** section: not a database (no locks, no transactions), every write
+  re-saves the whole workbook (with measured times), held in memory, Excel's data model,
+  what is and isn't checked against real Excel.
+- `check_sheet_name`, `check_dimensions` and `is_valid_xlsx` — public since 0.9.0, never
+  mentioned in the README.
+- What a write repaints, and that formatting you add by hand inside a table survives one.
+
 ## [0.9.6] — 2026-09-20
 
 ### Changed

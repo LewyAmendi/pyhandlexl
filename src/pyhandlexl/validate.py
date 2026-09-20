@@ -8,6 +8,7 @@ import re
 import sys
 import zipfile
 from pathlib import Path
+from typing import Any, cast
 
 from openpyxl import load_workbook
 
@@ -42,6 +43,59 @@ _REQUIRED_PARTS = frozenset({"xl/workbook.xml", "[Content_Types].xml"})
 _CELL_TYPES = (str, int, float, dt.date, dt.time, dt.timedelta)
 
 
+# The types that need no conversion — by far the common case, so it is one set lookup.
+_PLAIN = frozenset({str, int, bool, float, dt.datetime, dt.date, dt.time, dt.timedelta, type(None)})
+
+
+def normalize_cell_value(value: object) -> object:
+    """*value* as a cell holds it: what numpy and pandas produce, made plain.
+
+    * a numpy scalar becomes the Python value it holds (``np.int64(3)`` → ``3``,
+      ``np.bool_`` → ``bool``, ``np.datetime64`` → ``datetime``, ``np.timedelta64`` →
+      ``timedelta``), and a pandas ``Timestamp`` or ``Timedelta`` the plain ``datetime`` or
+      ``timedelta``;
+    * **every kind of missing value becomes ``None``, an empty cell**: ``nan`` (float or
+      numpy), ``pd.NaT``, ``pd.NA`` and ``np.datetime64('NaT')``;
+    * anything else — including a value neither library made — is returned unchanged.
+
+    numpy and pandas are never imported: the types are recognised by where they come from,
+    so this costs nothing when they aren't installed, and a plain value is one set lookup.
+    Infinities are left alone (Excel can't store them; :func:`check_cell_value` refuses them).
+    """
+    kind = type(value)
+    if kind in _PLAIN:
+        if kind is float and value != value:
+            return None
+        return value
+    if kind.__module__.partition(".")[0] not in ("numpy", "pandas"):
+        return value
+    return _from_analysis_library(cast(Any, value), kind)
+
+
+def _from_analysis_library(value: Any, kind: type) -> object:
+    name = kind.__name__
+    if name in ("NAType", "NaTType"):  # pd.NA, pd.NaT
+        return None
+    if hasattr(value, "to_pydatetime"):  # pd.Timestamp
+        return value.to_pydatetime(warn=False)
+    if hasattr(value, "to_pytimedelta"):  # pd.Timedelta
+        return value.to_pytimedelta()
+    if name in ("datetime64", "timedelta64"):
+        if value != value:  # NaT
+            return None
+        unit = "datetime64[us]" if name == "datetime64" else "timedelta64[us]"
+        plain = value.astype(unit).item()
+        if not isinstance(plain, (dt.datetime, dt.timedelta)):  # too far out for a datetime
+            raise CellTypeError(f"{value!r} is outside the dates Excel can store")
+        return plain
+    if hasattr(value, "item"):  # any other numpy scalar
+        plain = value.item()
+        if name in ("float16", "float32"):  # keep the digits it prints, not float64 noise
+            plain = float(str(value))
+        return normalize_cell_value(plain) if type(plain) in _PLAIN else plain
+    return value
+
+
 def check_dimensions(n_rows: int, n_cols: int) -> None:
     """Raise DimensionError if a grid of this size won't fit in an .xlsx sheet."""
     if n_rows > MAX_ROWS:
@@ -54,18 +108,21 @@ def check_cell_value(value: object) -> None:
     """Raise CellTypeError if *value* is not something Excel can store in a cell.
 
     Allowed: ``str``, ``int``, ``float``, ``bool``, ``datetime``, ``date``,
-    ``time``, ``timedelta``, and ``None`` (an empty cell). Rejected even though
-    they have an allowed type, because Excel would silently change or lose them
-    (or, for the first, make the whole file unreadable):
+    ``time``, ``timedelta``, and ``None`` (an empty cell) — and the numpy and pandas
+    equivalents, which are stored as the plain value (see :func:`normalize_cell_value`).
+    A missing value — ``nan``, ``pd.NaT``, ``pd.NA`` — is an empty cell, so it is allowed.
+    Rejected even though they have an allowed type, because Excel would silently change or
+    lose them (or, for the first, make the whole file unreadable):
 
     * a string with a character XML can't hold (a control character such as
       NUL, a lone surrogate, U+FFFE or U+FFFF), or longer than a cell holds
       (32,767 characters — longer is silently truncated);
-    * ``nan`` and the infinities;
+    * the infinities (``nan`` is fine: it is stored as an empty cell);
     * an ``int`` too large for a float;
     * a date before 1900-01-01, or after 9999-12-31 23:59:59.999;
     * a timezone-aware ``datetime``/``time`` — Excel has no timezone.
     """
+    value = normalize_cell_value(value)
     if value is None:
         return
     if not isinstance(value, _CELL_TYPES):
@@ -85,7 +142,7 @@ def check_cell_value(value: object) -> None:
             )
     elif isinstance(value, float):
         if not math.isfinite(value):
-            raise CellTypeError(f"Excel cannot store {value!r}; it would silently become blank")
+            raise CellTypeError(f"Excel cannot store {value!r}")
     elif isinstance(value, int):
         if abs(value) > sys.float_info.max:
             raise CellTypeError("an integer this large cannot be stored as an Excel number")

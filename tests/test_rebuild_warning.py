@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
@@ -15,6 +16,7 @@ from pyhandlexl import (
     create_sheet,
     delete_sheet,
     delete_table,
+    import_csv_to_xl,
     list_tables,
     rename_sheet,
     sheet_kind,
@@ -47,6 +49,12 @@ def _has_schema(path) -> bool:
     return SCHEMA_SHEET in load_workbook(path).sheetnames
 
 
+def _import_into_grid(path):
+    csv_path = Path(path).with_suffix(".csv")
+    csv_path.write_text("a,b\n", encoding="utf-8")
+    import_csv_to_xl(csv_path, path, sheet="Grid")
+
+
 # Each operation is written as a lambda HERE, in the test file, so "the caller's line"
 # is a line in this file — which is exactly what the warning must point at.
 OPERATIONS = {
@@ -59,6 +67,7 @@ OPERATIONS = {
     "rename_sheet": lambda p: rename_sheet(p, "Grid", "Grid2"),
     "clear_all_sheet_data": lambda p: clear_all_sheet_data(p, "Grid"),
     "write_sheet": lambda p: write_sheet(p, [["z"]], sheet="Grid"),
+    "import_csv_to_xl": lambda p: _import_into_grid(p),
     "append_rows": lambda p: append_rows(p, [["z"]], sheet="Grid"),
     "Table.create": lambda p: Table(column_headers=["a"], name="NEW").create(p, sheet="Data"),
 }
