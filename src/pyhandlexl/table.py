@@ -275,6 +275,25 @@ class Table:
             TableNotFoundError: no such table exists, or its marker cannot be
                 found on its recorded sheet.
         """
+        # The usual case — the schema is there and the table is where it says — needs only
+        # the schema sheet and this table's sheet, so it reads them and parses nothing else.
+        with mt.cheap_schema(path) as cheap:
+            if cheap is not None:
+                workbook, entries = cheap
+                entry = mt.get_entry(entries, name)
+                if entry.sheet in workbook.sheetnames:
+                    ws = workbook[entry.sheet]
+                    if mt.marker_matches(ws, entry):
+                        snapshot, formulas = mt.read_table(ws, entry)
+                        table = cls._from_snapshot(snapshot, entry, name)
+                        if formulas:
+                            warnings.warn(
+                                mt.formula_warning(f"table {name!r}", formulas), stacklevel=2
+                            )
+                        return table
+
+        # Otherwise something has to be repaired (a missing schema sheet is rebuilt, a moved
+        # table found and its position corrected) and saved, which needs the whole workbook.
         workbook = safe_load(path)
         try:
             schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
@@ -282,14 +301,7 @@ class Table:
             entry = mt.get_entry(entries, name)
             located = mt.verify_or_locate(workbook, entry)
             healed = located != entry
-            snapshot = mt.read_snapshot(workbook[located.sheet], located)
-            formulas = mt.find_formulas(
-                workbook[located.sheet],
-                located.anchor_row + 1,
-                located.anchor_col,
-                located.height - 1,
-                located.width,
-            )
+            snapshot, formulas = mt.read_table(workbook[located.sheet], located)
 
             if healed:
                 entries[name] = located
@@ -299,22 +311,27 @@ class Table:
         finally:
             workbook.close()
 
+        table = cls._from_snapshot(snapshot, located, name)
+        if formulas:
+            warnings.warn(mt.formula_warning(f"table {name!r}", formulas), stacklevel=2)
+        return table
+
+    @classmethod
+    def _from_snapshot(cls, snapshot: Snapshot, entry: mt.TableEntry, name: str) -> Table:
+        """The Table for a table just read from disk, remembering what it saw there."""
         table = cls(
             snapshot.data,
             snapshot.row_labels,
             snapshot.corner,
             column_headers=snapshot.column_headers,
             name=name,
-            style=located.style,
-            column_types=dict(zip(snapshot.column_headers, located.column_types, strict=True)),
+            style=entry.style,
+            column_types=dict(zip(snapshot.column_headers, entry.column_types, strict=True)),
         )
-        table._sheet = located.sheet
-        table._created_at = located.created_at
-        table._modified_at = located.modified_at
+        table._sheet = entry.sheet
+        table._created_at = entry.created_at
+        table._modified_at = entry.modified_at
         table._set_base()
-
-        if formulas:
-            warnings.warn(mt.formula_warning(f"table {name!r}", formulas), stacklevel=2)
         return table
 
     @classmethod

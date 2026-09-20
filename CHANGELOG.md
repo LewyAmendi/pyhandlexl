@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Groundwork for 1.0: an audit of the public API, and a second round of speed-ups.
 
 ### Changed (these can break existing code)
+- **A read no longer fails because of a damaged sheet it doesn't read.** Reads used to load
+  (and so parse) the whole workbook first; now a damaged part is noticed only when it is
+  read, and then raises `InvalidFileError` as above. Reads also skip the up-front check
+  that decompressed the entire archive, so a corrupt part of a sheet you do read is found as
+  it is read rather than before.
 - **`nan` is now a blank cell, not an error.** `nan`, `pd.NaT`, `pd.NA` and
   `np.datetime64('NaT')` were refused (`CellTypeError`: Excel can't store them); they are
   now stored as an empty cell and read back as `None`, which is what analysis data needs.
@@ -72,6 +77,22 @@ Groundwork for 1.0: an audit of the public API, and a second round of speed-ups.
   change on purpose.
 
 ### Performance
+- **Reads only parse the sheets they need.** `Table.read`, `table_info`, `list_tables`,
+  `list_sheets`, `sheet_exists`, `sheet_kind` and `read_sheet` used to load the whole
+  workbook, parsing *every* sheet, so reading one small table from a workbook of big sheets
+  cost as much as reading all of them. They now open it read-only. On a workbook of five
+  4,000 × 8 sheets plus a 50-row table (one Windows machine): `Table.read` of that table
+  1.47 s → 0.024 s, `list_tables` 2.15 s → 0.017 s, `list_sheets` 1.99 s → 0.017 s,
+  `table_info` 1.79 s → 0.020 s, `sheet_kind` 1.66 s → 0.019 s, `read_sheet` of one big sheet
+  1.69 s → 0.28 s. `table_info` on a single 4,000-row table: 0.51 s → 0.013 s. Reading one
+  big sheet is bound by how fast openpyxl parses it (about 0.4 s for 36,000 cells) and is
+  only slightly faster. Anything a read would have to *repair* — a missing schema sheet, a
+  table whose marker has moved — still takes the full load and saves, exactly as before.
+  Every read function is checked against a full load, by `tests/test_read_paths.py`, on 16
+  kinds of awkward workbook — each with its size declared correctly, too small, too large and
+  not at all: rows or columns deleted in Excel, sparse data, styled empty cells, every cell
+  type, the 1904 date epoch, hidden and chart sheets, merged cells, a moved table, a missing
+  schema sheet and a missing sheet part.
 - **A write repaints only what changed.** With the style and shape unchanged nothing is
   repainted (only values are rewritten); adding or dropping rows or columns repaints just
   the old and the new last row and column, the only cells whose border changes. Editing a
@@ -86,6 +107,10 @@ Groundwork for 1.0: an audit of the public API, and a second round of speed-ups.
   for an undeclared namespace prefix.
 
 ### Fixed
+- **A damaged sheet raised a raw XML error, not `InvalidFileError`.** A sheet whose XML was
+  truncated or garbled made every function that loaded the workbook raise
+  `xml.etree.ElementTree.ParseError` (or `KeyError`, `zlib.error`, …) although the docs
+  promise `InvalidFileError` for a file that isn't a readable `.xlsx`. It does now.
 - **`import_csv_to_xl`'s schema-rebuild warning pointed into the library,** at a line of
   `core.py`, not at your call (it does its work through `write_sheet`, one frame deeper
   than the depth the warning's location was computed for) — although the README says
