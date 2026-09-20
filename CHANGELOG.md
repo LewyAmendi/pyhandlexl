@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Groundwork for 1.0: an audit of the public API, and a second round of speed-ups.
 
 ### Changed (these can break existing code)
+- **The API freeze — exceptions.** Everything the library raises for a problem with the
+  *data or the file* is now a `PyhandlexlError` (the README claimed all errors were, but
+  several were bare `ValueError`s). Each new type is also the builtin it replaces, so existing
+  `except ValueError` clauses keep working:
+  - **`SheetExistsError`** (new; a `SheetNameError`): `create_sheet`, `rename_sheet` and the
+    capitalisation clash in `write_sheet`/`append_rows`. Tables had `TableExistsError` and
+    sheets a bare `ValueError`; an idempotent create is now `except SheetExistsError`.
+  - **`MalformedTableError`** (new; a `ValueError`): a table with a blank header or label,
+    left in a hand-edited file — the caller did nothing wrong, so it shouldn't be a bare error.
+  - **`InvalidFileError` is now also a `ValueError`**, and an unparseable CSV raises it (it
+    was a bare `ValueError`).
+  - What stays standard: `TypeError`/`ValueError`/`KeyError`/`IndexError` for a wrong *call*,
+    and `FileNotFoundError`/`FileExistsError`. The README's Errors section says which is which.
+- **`check_cell_value`, `check_sheet_name` and `is_valid_xlsx` take their one argument by
+  position only** (`check_sheet_name`'s was named `sheet_name`, unlike every other parameter
+  for a sheet's name). A parameter name nobody needs is one less thing to keep for 1.x.
 - **A read no longer fails because of a damaged sheet it doesn't read.** Reads used to load
   (and so parse) the whole workbook first; now a damaged part is noticed only when it is
   read, and then raises `InvalidFileError` as above. Reads also skip the up-front check
@@ -50,6 +66,16 @@ Groundwork for 1.0: an audit of the public API, and a second round of speed-ups.
   repr of a 2,000-row table was 60 KB.)
 
 ### Added
+- **`Table.row_labels`, `Table.column_headers` and `Table.corner`** — cheap access to the
+  labels, headers and corner. `t.data` copies every value on each access (4 ms on a 4,000-row
+  table), so `"Bob" in t.data.row_labels` — which the README recommended — was quadratic in a
+  loop; these copy only what they name.
+- **`SheetKind` and `Orientation`** are exported, so code that annotates the values
+  `sheet_kind()` returns or `orientation=` takes can name them.
+- A **Stability and versioning** section in the README: what the public API is (the top-level
+  names and `pyhandlexl.grid`), what 1.x promises, and what isn't covered.
+- `tests/test_misuse.py` calls every public function and `Table` method with garbage in each
+  parameter and requires a deliberate error every time.
 - **Use your data with pandas and numpy.** Optional extras (`pyhandlexl[pandas]`,
   `pyhandlexl[numpy]`); the library still imports neither, and a test checks that.
   - `Table.to_dataframe()` — row labels as the index (the corner is its name), headers as the
@@ -107,6 +133,10 @@ Groundwork for 1.0: an audit of the public API, and a second round of speed-ups.
   for an undeclared namespace prefix.
 
 ### Fixed
+- **A sheet name that wasn't a string crashed with `AttributeError`.** `Table.create`,
+  `clear_all_sheet_data`, `delete_sheet`, `rename_sheet` and `sheet_kind` failed on
+  `.strip()` for a tuple, number or bytes; they raise `SheetNameError` now, like `write_sheet`
+  already did. Found by the new misuse sweep.
 - **A damaged sheet raised a raw XML error, not `InvalidFileError`.** A sheet whose XML was
   truncated or garbled made every function that loaded the workbook raise
   `xml.etree.ElementTree.ParseError` (or `KeyError`, `zlib.error`, …) although the docs

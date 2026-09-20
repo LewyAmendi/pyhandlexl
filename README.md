@@ -136,8 +136,15 @@ non-`str` label/header/corner raises `TypeError`. Data values keep their type.
 
 ```python
 t.set_corner("name")  # changes the value of cell A1
-t.data                 # a TableData snapshot — read the corner via t.data.corner
+t.data                 # a TableData snapshot of everything, described just below
+t.row_labels           # ['Alice', 'Bob']  — the labels alone, a cheap copy
+t.column_headers       # ['q1', 'q2']      — the headers alone, a cheap copy
+t.corner               # the corner cell's value (str)
 ```
+
+`t.data` copies every value each time you touch it, so for the labels, the headers or the
+corner use the three properties above — always in a loop, where `t.data.row_labels` on every
+pass would be quadratic (4 ms a time on a table of 4,000 rows).
 
 ```python
 d = t.data
@@ -514,9 +521,9 @@ same as always.
 t1 == t2   # compares data, headers, labels, corner, and column types
 ```
 
-Row count and row-label membership go through `t.data` instead of `len()`/`in`,
-so the call site says what's being checked: `len(t.data.rows)`,
-`"Bob" in t.data.row_labels`.
+A `Table` has no `len()` or `in` of its own, so the call site says what's being checked:
+`len(t.row_labels)` (or `t.info.n_rows`) for the row count, `"Bob" in t.row_labels` for
+membership.
 
 ### Multiple named tables on one sheet
 
@@ -640,7 +647,7 @@ by the next write.
 
 **Editing a table by hand.** Numeric and date headers or labels are read as text.
 A blank data cell is `None`. Duplicate labels or headers are tolerated on read.
-A *blank* header or label can't be read as a table, and the error says which cell
+A *blank* header or label can't be read as a table (`MalformedTableError`), and the error says which cell
 (`... the column header in cell C2 is blank ...`) so you can fix it in Excel. Rows or
 columns inserted above or left of a table are healed; deleting the marker cell (or a
 column through it) makes the table unfindable. Error values (`#DIV/0!`) read as their
@@ -963,7 +970,7 @@ overwrites.
 
 ```python
 arr = t.to_numpy()                       # the data, without the labels
-labels, headers = t.data.row_labels, t.data.column_headers
+labels, headers = t.row_labels, t.column_headers
 ```
 
 With no `dtype` the array gets the natural one for what the table holds: `int64`, `float64`,
@@ -1051,7 +1058,7 @@ from pyhandlexl import (
 
 list_sheets(path)                 # ['Sheet', 'Data']
 sheet_exists(path, "Data")        # True
-create_sheet(path, "Results")     # ValueError if it already exists
+create_sheet(path, "Results")     # SheetExistsError if it already exists
 delete_sheet(path, "Old")         # refuses to delete the last sheet, or the schema sheet; forgets its tables too
 rename_sheet(path, "Old", "New")  # moves its tables' tracked location along with it; refuses the schema sheet either way
 list_tables(path)                 # every named table in the workbook (all sheets)
@@ -1067,7 +1074,7 @@ and `clear_all_sheet_data`.
 
 Excel treats sheet names as **case-insensitive**, so `create_sheet`,
 `rename_sheet`, `write_sheet`, and `append_rows` refuse a name that differs from
-an existing sheet's only by capitalisation (`ValueError`) instead of letting the
+an existing sheet's only by capitalisation (`SheetExistsError`) instead of letting the
 file quietly end up with `data1` when you asked for `data`. (Changing just a
 sheet's own capitalisation — `rename_sheet(path, "log", "LOG")` — is fine.) The
 same goes for the reserved schema sheet's name, `_pyhandlexl_tables`, in *any*
@@ -1154,11 +1161,22 @@ is_valid_xlsx(path)             # True if the file opens as a workbook (never ra
 
 ## Errors
 
-All raised exceptions derive from `PyhandlexlError`:
+There are two kinds, and it is worth knowing which is which:
+
+- **A problem with the data or the file** raises one of the library's own exceptions, all of
+  which derive from `PyhandlexlError` — so `except PyhandlexlError` catches every one of them
+  (below). Each is also the standard exception it resembles, so `except ValueError` or
+  `except KeyError` keeps working too.
+- **A wrong call** — a value of the wrong type, an unknown row or column label, a duplicate
+  label, a position out of range, a wrong-length row — raises the standard `TypeError`,
+  `ValueError`, `KeyError` or `IndexError`, as it would from any Python function. The
+  file-system errors, `FileNotFoundError` and `FileExistsError`, are also the standard ones.
+  These are mistakes in the code, not failures to handle.
 
 | Exception | Also a | Meaning |
 |---|---|---|
-| `SheetNameError` | `ValueError` | invalid worksheet name |
+| `SheetNameError` | `ValueError` | invalid worksheet name (not a string, empty, too long, illegal characters) |
+| `SheetExistsError` | `SheetNameError` | a sheet with that name — or one differing only by capitalisation — already exists |
 | `DimensionError` | `ValueError` | data exceeds Excel's 1,048,576 × 16,384 grid |
 | `SheetNotFoundError` | `KeyError` | no worksheet with that name |
 | `FileLockedError` | `OSError` | file stayed locked (open in Excel) through every retry |
@@ -1167,8 +1185,12 @@ All raised exceptions derive from `PyhandlexlError`:
 | `ColumnTypeError` | `TypeError` | a value doesn't match its column's `ColumnType` restriction |
 | `TableNotFoundError` | `KeyError` | no named table with that name, or its marker is gone |
 | `TableExistsError` | `ValueError` | a named table with that name already exists |
+| `MalformedTableError` | `ValueError` | a table can't be read because a header or row label was left blank — the message names the cell |
 | `SheetKindError` | `ValueError` | the sheet already holds the other kind of data (table vs. grid), or its name is the reserved schema sheet's (in any capitalisation) |
-| `InvalidFileError` | — | file is missing or not a readable `.xlsx` |
+| `InvalidFileError` | `ValueError` | the file is not a readable workbook (or CSV): not a zip, damaged, or a part that won't parse |
+
+An idempotent "make sure this sheet exists" is just
+`try: create_sheet(path, "Log")` / `except SheetExistsError: pass`.
 
 `SchemaRebuiltWarning`, `MergeConflictWarning` and `FormulaWarning` are not in this table on
 purpose — they're `Warning`s (via Python's `warnings` module), not
@@ -1227,6 +1249,32 @@ protection / encryption. For any of that, use openpyxl directly. (Charts,
 merged cells and the like that are already in a workbook are left alone when
 you write to it — see [Files](#files) — but pyhandlexl has no way to create or
 edit them.)
+
+## Stability and versioning
+
+pyhandlexl follows [semantic versioning](https://semver.org/). From 1.0.0 the **public API** does
+not change incompatibly within a major version: a script that works on 1.0 works on every
+1.x release. The public API is:
+
+- every name importable from the top-level package — `import pyhandlexl` and everything in
+  `pyhandlexl.__all__` — and the functions of `pyhandlexl.grid`, with their parameters (by name
+  and position), what they return, and which exceptions they raise;
+- the file format: a workbook written by any 1.x release opens in any other, and the reserved
+  schema sheet is always readable by later versions.
+
+New features arrive in minor releases and only add: new functions, new keyword arguments with
+defaults, new exception subclasses (which are always subclasses of the exception they refine, so
+existing `except` clauses keep working).
+
+Not part of the API, and free to change in any release: the internal modules (anything whose
+name starts with an underscore, and the submodules `pyhandlexl.core`, `.table`, `.validate` and
+the like when imported directly instead of from the top level), the exact wording of messages
+and warnings, the `repr` of any object, and performance. The validators `check_cell_value`,
+`check_sheet_name` and `is_valid_xlsx` take their argument by position, so it has no public
+name.
+
+A feature is not removed without a deprecation warning that lasts at least one minor release;
+removal happens only in the next major version.
 
 ## Development
 
