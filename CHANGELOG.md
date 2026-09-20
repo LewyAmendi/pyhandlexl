@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Groundwork for 1.0: an audit of the public API, and a second round of speed-ups.
+## [0.9.8] — 2026-09-20
+
+The last feature release before 1.0. There is no 0.9.7 (that number was only a working
+label): the version goes from 0.9.6 to 0.9.8. A 0.9.9, if it is needed, will be fixes from
+hands-on testing and nothing else, and 1.0.0 follows it.
+
+In short: formulas are gone (a string is always text); pandas and numpy are supported;
+writes repaint only what changed and reads parse only the sheets they need (seconds down
+to milliseconds on a workbook of several sheets); and the public API is frozen for 1.0 —
+see the README's "Stability and versioning".
 
 ### Changed (these can break existing code)
 - **The API freeze — exceptions.** Everything the library raises for a problem with the
@@ -777,7 +786,8 @@ Groundwork for 1.0: an audit of the public API, and a second round of speed-ups.
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.6...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.8...HEAD
+[0.9.8]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.6...v0.9.8
 [0.9.6]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.3...v0.9.4

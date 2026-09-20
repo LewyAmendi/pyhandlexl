@@ -41,10 +41,11 @@ Have a `.csv` file instead of `.xlsx`? `read_sheet`/`write_sheet`/
 data *between* CSV and `.xlsx` instead, see
 [Moving data between CSV and .xlsx](#moving-data-between-csv-and-xlsx).
 
-> **Beta.** The features are in and tested; the API may still change in small ways
-> before 1.0, and every change is recorded in the
+> **Beta, on the way to 1.0.** The API is frozen (see
+> [Stability and versioning](#stability-and-versioning)); only bug fixes are planned
+> before 1.0.0, and every change is recorded in the
 > [changelog](https://github.com/LewyAmendi/pyhandlexl/blob/main/CHANGELOG.md).
-> Pin a version (`pyhandlexl~=0.9.6`) if you need it not to move.
+> Pin a version (`pyhandlexl~=0.9.8`) if you need it not to move.
 
 ## Install
 
@@ -322,7 +323,7 @@ bob.add_row("bob-1", [3, 4])
 alice.write("log.xlsx")
 bob.write("log.xlsx")        # merges: the file now has BOTH rows
 
-bob.data.row_labels          # [..., 'alice-1', 'bob-1'] — bob's object is updated too
+bob.row_labels               # [..., 'alice-1', 'bob-1'] — bob's object is updated too
 bob.last_merge               # MergeReport(rows_added=('alice-1',), ...)
 ```
 
@@ -1211,9 +1212,10 @@ What to know before relying on it, so none of it is a surprise:
   the *file*, not of your edit: on an ordinary Windows machine, editing one cell of a table
   of 4,000 rows × 8 columns and writing it back takes about 1.5 seconds. A small workbook
   takes milliseconds.
-- **A read only parses the sheets it needs.** Reading a table, listing tables or sheets,
-  or asking a sheet's kind opens the workbook read-only, so a workbook of several big
-  sheets costs a small table's read (about 25 ms) rather than the whole file's — but the
+- **A read only parses the sheets it needs.** Reading a table or a sheet, listing tables
+  or sheets, or asking a sheet's kind opens the workbook read-only, so a workbook of
+  several big sheets costs a small table's read (about 25 ms) rather than the whole
+  file's — but the
   cost of reading *one* big sheet is what it is: about 0.4 seconds for that same 4,000 × 8
   table, which is as fast as openpyxl parses. It is meant for thousands of rows, not
   hundreds of thousands — and for a plain grid, `append_rows` costs only what the new rows
