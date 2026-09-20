@@ -1,7 +1,7 @@
 """Values and names Excel can't hold must be refused up front — never written, never mangled.
 
 Each of these used to be accepted silently and then either lost data (a long string cut
-short, ``nan`` turned blank, a date shifted) or, worst, produced a workbook that could no
+short, a date shifted) or, worst, produced a workbook that could no
 longer be opened at all.
 """
 
@@ -70,7 +70,6 @@ STORABLE_STRINGS = [
 ]
 
 UNSTORABLE_VALUES = [
-    float("nan"),
     float("inf"),
     float("-inf"),
     10**400,
@@ -119,12 +118,11 @@ STORABLE_VALUES = [
 
 
 # Each test that goes through a whole write builds a workbook, so those use a representative
-# few (a control character, a lone surrogate, a non-character, an over-long string; nan, inf,
+# few (a control character, a lone surrogate, a non-character, an over-long string; inf,
 # a huge int, an out-of-range date, a timezone, a foreign type). The unit tests above and
 # below use every one.
 API_BAD_STRINGS = [UNSTORABLE_STRINGS[i] for i in (0, 7, 9, 11)]
 API_BAD_VALUES = [
-    float("nan"),
     float("inf"),
     10**400,
     dt.datetime.min,
@@ -226,7 +224,7 @@ class TestRefusedBeforeAnythingIsWritten:
             Table(**kwargs).create(workbook, sheet="Data")
         _untouched(workbook, before)
 
-    @pytest.mark.parametrize("value", [API_BAD_STRINGS[0], API_BAD_STRINGS[1], float("nan")])
+    @pytest.mark.parametrize("value", [API_BAD_STRINGS[0], API_BAD_STRINGS[1], float("inf")])
     def test_a_later_write_of_an_existing_table(self, workbook, value):
         Table(data=[[1]], row_labels=["r"], column_headers=["c"], name="T").create(
             workbook, sheet="Data"

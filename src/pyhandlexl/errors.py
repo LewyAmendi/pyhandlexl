@@ -35,6 +35,9 @@ class FileReadOnlyError(FileLockedError):
 class SheetNotFoundError(PyhandlexlError, KeyError):
     """No worksheet with the requested name exists in the workbook."""
 
+    def __str__(self) -> str:  # KeyError would show repr(message), quotes and all
+        return Exception.__str__(self)
+
 
 class CellTypeError(PyhandlexlError, TypeError):
     """A cell value is not a type Excel can store."""
@@ -53,6 +56,9 @@ class ColumnTypeError(PyhandlexlError, TypeError):
 
 class TableNotFoundError(PyhandlexlError, KeyError):
     """No named table with this name exists, or its marker cannot be found."""
+
+    def __str__(self) -> str:  # KeyError would show repr(message), quotes and all
+        return Exception.__str__(self)
 
 
 class TableExistsError(PyhandlexlError, ValueError):
@@ -83,6 +89,16 @@ class MergeConflictWarning(UserWarning):
     differently (the same cell, the same new row or column, an edit to
     something the other side deleted, and so on). Your side always wins, and
     the message lists what it overwrote.
+    """
+
+
+class FormulaWarning(UserWarning):
+    """A workbook being read holds formulas, which pyhandlexl does not support.
+
+    Not a ``PyhandlexlError`` — the read still succeeds. A formula cell is read as its
+    text (``"=A1+B1"``), and pyhandlexl never writes a formula: writing that text back
+    stores it as text, replacing the formula. So read a range that holds formulas only if
+    you mean to turn them into text; use openpyxl directly to work with formulas.
     """
 
 

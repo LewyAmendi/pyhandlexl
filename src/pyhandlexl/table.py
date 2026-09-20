@@ -21,10 +21,11 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from openpyxl.utils import coordinate_to_tuple
 
+from pyhandlexl import _frames
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._merge import MergeReport, Snapshot, merge, same_state
 from pyhandlexl._safety import atomic_save, safe_load
@@ -37,10 +38,17 @@ from pyhandlexl.errors import (
     SheetNotFoundError,
 )
 from pyhandlexl.style import TableStyle
-from pyhandlexl.validate import check_cell_value, check_dimensions, normalize_newlines
+from pyhandlexl.validate import (
+    check_cell_value,
+    check_dimensions,
+    normalize_cell_value,
+    normalize_newlines,
+)
+
+_REPR_CELLS = 100  # a snapshot bigger than this is shown as its shape
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class TableData:
     """A read-only snapshot of a Table's content."""
 
@@ -49,6 +57,21 @@ class TableData:
     row_labels: list[str]
     column_headers: list[str]
     corner: str
+
+    def __repr__(self) -> str:
+        # `rows` and `columns` hold the same cells twice; a big table's full repr runs to
+        # megabytes, so past a screenful only its shape is shown.
+        cells = len(self.row_labels) * len(self.column_headers)
+        if cells > _REPR_CELLS:
+            return (
+                f"TableData({len(self.row_labels)} rows x {len(self.column_headers)} columns, "
+                f"corner={self.corner!r}; use .rows, .columns, .row_labels or "
+                ".column_headers for the contents)"
+            )
+        return (
+            f"TableData(rows={self.rows!r}, row_labels={self.row_labels!r}, "
+            f"column_headers={self.column_headers!r}, corner={self.corner!r})"
+        )
 
 
 @dataclass(frozen=True)
@@ -100,7 +123,7 @@ def _values(values: Iterable[object]) -> list[object]:
             f"values must be a sequence, not a single {type(values).__name__} ({values!r}) — "
             "iterating it would split it into individual characters"
         )
-    return list(values)
+    return [normalize_cell_value(value) for value in values]
 
 
 def _conflict_message(name: str, report: MergeReport) -> str:
@@ -156,7 +179,9 @@ class Table:
                     f"{type(value).__name__} ({value!r}) — iterating it would split "
                     "it into individual characters"
                 )
-        self._data: list[list[object]] = [list(row) for row in data]
+        self._data: list[list[object]] = [
+            [normalize_cell_value(value) for value in row] for row in data
+        ]
         self._column_headers: list[str] = list(column_headers)
         self._row_labels: list[str] = list(row_labels)
         self._corner: str = corner
@@ -258,6 +283,13 @@ class Table:
             located = mt.verify_or_locate(workbook, entry)
             healed = located != entry
             snapshot = mt.read_snapshot(workbook[located.sheet], located)
+            formulas = mt.find_formulas(
+                workbook[located.sheet],
+                located.anchor_row + 1,
+                located.anchor_col,
+                located.height - 1,
+                located.width,
+            )
 
             if healed:
                 entries[name] = located
@@ -281,6 +313,8 @@ class Table:
         table._modified_at = located.modified_at
         table._set_base()
 
+        if formulas:
+            warnings.warn(mt.formula_warning(f"table {name!r}", formulas), stacklevel=2)
         return table
 
     @classmethod
@@ -290,6 +324,7 @@ class Table:
         corner: str = "",
         *,
         name: str,
+        style: TableStyle | None = None,
         column_types: Mapping[str, ColumnType] | None = None,
     ) -> Table:
         """Build a Table from a dict of dicts: row label -> {column header: value}.
@@ -322,7 +357,13 @@ class Table:
                 )
         data = [list(row.values()) for row in rows]
         return cls(
-            data, row_labels, corner, column_headers=headers, name=name, column_types=column_types
+            data,
+            row_labels,
+            corner,
+            column_headers=headers,
+            name=name,
+            style=style,
+            column_types=column_types,
         )
 
     # ------------------------------------------------------------ properties
@@ -450,6 +491,89 @@ class Table:
             for label, row in zip(self._row_labels, self._data, strict=True)
         }
 
+    def to_dataframe(self) -> Any:
+        """The table as a pandas ``DataFrame``: row labels as the index (the corner is the
+        index's name), column headers as the columns, and the data as the values.
+
+        A blank cell is ``NaN`` (``NaT`` in a date or duration column, ``<NA>`` in a boolean
+        one). Each column's dtype is inferred from what it holds, and a column restricted to
+        a :class:`~pyhandlexl.column_type.ColumnType` is settled to match it — ``DATE`` as
+        ``datetime64``, ``DURATION`` as ``timedelta64``, ``BOOLEAN`` as ``bool`` (or the
+        nullable ``boolean`` if it has blanks), ``NUMBER`` as ``int64`` or ``float64``. Excel
+        has one kind of number, so a column of whole numbers comes back ``int64`` even if it
+        went in as ``float64``.
+
+        The DataFrame is a copy: changing it doesn't change the table. Needs pandas
+        (``pip install "pyhandlexl[pandas]"``).
+
+        Raises:
+            ImportError: pandas is not installed.
+        """
+        return _frames.table_to_dataframe(self.data, self._column_types)
+
+    @classmethod
+    def from_dataframe(
+        cls,
+        df: Any,
+        *,
+        name: str,
+        style: TableStyle | None = None,
+        column_types: Mapping[str, ColumnType] | None = None,
+        infer_column_types: bool = False,
+    ) -> Table:
+        """Build a Table from a pandas ``DataFrame`` — the inverse of :meth:`to_dataframe`.
+
+        The index becomes the row labels (and its name the corner) and the columns the column
+        headers. **Both must be strings**, since a table's labels and headers are text:
+        convert them first (``df.index = df.index.astype(str)``), or make a column the index
+        (``df.set_index("id")``). A ``MultiIndex`` is refused. Values are stored as the plain
+        Python values they hold, and every missing value — ``NaN``, ``NaT``, ``pd.NA`` —
+        becomes a blank cell.
+
+        Columns are unrestricted unless *column_types* says otherwise; with
+        *infer_column_types* each column is restricted to the type its values have
+        (numbers, booleans, dates, durations, times, text; a column of mixed or no values stays
+        unrestricted). *column_types* wins for the columns it names.
+
+        The result is an ordinary in-memory Table, to be placed with :meth:`create` (or to
+        replace a table that exists, with :meth:`write`, which doesn't merge — it never read
+        the file).
+
+        Raises:
+            ImportError: pandas is not installed.
+            TypeError: *df* isn't a DataFrame, or its index or columns hold something other
+                than strings, or the index name isn't a string.
+        """
+        rows, labels, corner, headers, inferred = _frames.dataframe_to_table_parts(
+            df, infer_column_types
+        )
+        return cls(
+            rows,
+            labels,
+            corner,
+            column_headers=headers,
+            name=name,
+            style=style,
+            column_types={**inferred, **(column_types or {})},
+        )
+
+    def to_numpy(self, dtype: Any = None) -> Any:
+        """The data — no labels — as a 2-D numpy array, one row per table row.
+
+        With no *dtype* the array gets the natural one for what the table holds: ``int64``,
+        ``float64``, ``bool``, ``datetime64[us]`` or ``timedelta64[us]`` when every cell is
+        of that kind, and ``object`` for text or a mixture. A blank cell is ``nan`` (``NaT``
+        for dates and durations), or ``None`` in an ``object`` array. The labels are in
+        :attr:`data` (``t.data.row_labels``, ``t.data.column_headers``). Needs numpy
+        (``pip install "pyhandlexl[numpy]"``).
+
+        Raises:
+            ImportError: numpy is not installed.
+            TypeError: the data can't be converted to *dtype* (a blank cell can't be an
+                integer, for instance).
+        """
+        return _frames.rows_to_numpy(self._data, self._width(), dtype)
+
     # ---------------------------------------------------------- label access
 
     def _row_index(self, label: str) -> int:
@@ -464,13 +588,13 @@ class Table:
         except ValueError:
             raise KeyError(f"no column headed {header!r}") from None
 
-    def read_row(self, row_label: str) -> list[object]:
-        """The data row for *row_label* (labels not included)."""
-        return list(self._data[self._row_index(row_label)])
+    def read_row(self, label: str) -> list[object]:
+        """The data row for *label* (labels not included)."""
+        return list(self._data[self._row_index(label)])
 
-    def read_column(self, column_header: str) -> list[object]:
-        """The data column for *column_header* (headers not included)."""
-        j = self._column_index(column_header)
+    def read_column(self, header: str) -> list[object]:
+        """The data column for *header* (headers not included)."""
+        j = self._column_index(header)
         return [row[j] for row in self._data]
 
     # ------------------------------------------------- position/label access
@@ -581,6 +705,7 @@ class Table:
         :meth:`set_corner` for those. By label there's no other kind of cell
         to reach, so it always sets data.
         """
+        value = normalize_cell_value(value)
         target = self._dispatch(ref, row, column)
         if isinstance(target, _Position):
             self._set_by_position(target.row, target.column, value)
@@ -597,19 +722,19 @@ class Table:
             raise ValueError("that cell is a row label — rename it with rename_row()")
         self._data[i][j] = value
 
-    def set_row(self, row_label: str, values: Iterable[object]) -> None:
-        """Replace the data row for *row_label*; ``len(values)`` must match the column count."""
+    def set_row(self, label: str, values: Iterable[object]) -> None:
+        """Replace the data row for *label*; ``len(values)`` must match the column count."""
         new_row = _values(values)
-        i = self._row_index(row_label)
+        i = self._row_index(label)
         expected = self._width()
         if len(new_row) != expected:
             raise ValueError(f"expected {expected} values, got {len(new_row)}")
         self._data[i] = new_row
 
-    def set_column(self, column_header: str, values: Iterable[object]) -> None:
-        """Replace the data column for *column_header*; ``len(values)`` must match the row count."""
+    def set_column(self, header: str, values: Iterable[object]) -> None:
+        """Replace the data column for *header*; ``len(values)`` must match the row count."""
         new_col = _values(values)
-        j = self._column_index(column_header)
+        j = self._column_index(header)
         if len(new_col) != len(self._data):
             raise ValueError(f"expected {len(self._data)} values, got {len(new_col)}")
         for data_row, value in zip(self._data, new_col, strict=True):
@@ -908,12 +1033,17 @@ class Table:
                 ws = workbook[entry.sheet]
                 old_height, old_width = entry.height, entry.width
                 new_height, new_width = new_n_rows + 2, new_n_cols + 1
-                mt.clear_region(
+                # Only what changes is cleared and repainted: with the style and the shape
+                # unchanged that is nothing, and a row or column added at the end touches
+                # only the old and the new last one. Values are always rewritten.
+                row_limit, col_limit = mt.stable_extent(entry, new_n_rows, new_n_cols, self._style)
+                mt.clear_for_rewrite(
                     ws,
-                    entry.anchor_row,
-                    entry.anchor_col,
+                    entry,
                     max(old_height, new_height),
                     max(old_width, new_width),
+                    row_limit,
+                    col_limit,
                 )
                 mt.write_region(ws, entry.anchor_row, entry.anchor_col, [[mt.MARKER, self._name]])
                 mt.write_region(ws, entry.anchor_row + 1, entry.anchor_col, assembled)
@@ -927,7 +1057,7 @@ class Table:
                     modified_at=now,
                 )
                 entries[self._name] = updated_entry
-                mt.paint_table(ws, updated_entry)
+                mt.paint_table(ws, updated_entry, row_limit, col_limit)
                 mt.save_schema(workbook, entries)
                 atomic_save(workbook, path)
             except BaseException:
@@ -966,7 +1096,7 @@ class Table:
             if mt.is_schema_name(sheet):
                 raise mt.reserved_error(sheet, "cannot hold a table")
             if sheet not in workbook.sheetnames:
-                raise SheetNotFoundError(sheet)
+                raise SheetNotFoundError(f"no worksheet named {sheet!r}")
             entries = mt.load_schema(workbook)
             if mt.sheet_kind(workbook, entries, sheet) == "grid":
                 raise SheetKindError(

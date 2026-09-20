@@ -13,6 +13,9 @@ short rows with ``None`` as needed.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
+
+from pyhandlexl import _frames
 
 Grid = list[list[object]]
 
@@ -198,6 +201,38 @@ def transpose(grid: Iterable[Iterable[object]]) -> Grid:
 
 
 # ----------------------------------------------------------------- display
+
+
+def to_dataframe(grid: Iterable[Iterable[object]], *, header: bool = True) -> Any:
+    """A pandas ``DataFrame`` from a grid.
+
+    With *header* (the default) the first row becomes the column names; without it the
+    columns are numbered from 0. Rows are padded to the widest one, and a blank is ``NaN``
+    (``None`` in a text column). Needs pandas (``pip install "pyhandlexl[pandas]"``).
+
+    For a *table* — a sheet with row labels and column headers — use
+    :meth:`Table.to_dataframe <pyhandlexl.Table.to_dataframe>` instead.
+
+    Raises:
+        ImportError: pandas is not installed.
+    """
+    return _frames.grid_to_dataframe(grid, header)
+
+
+def from_dataframe(df: Any, *, header: bool = True, index: bool = False) -> Grid:
+    """A grid from a pandas ``DataFrame``, ready for ``write_sheet``.
+
+    With *header* (the default) the column names are the first row; with *index* the index
+    is the first column (and its name the first header). Values are stored as the plain
+    Python values they hold, and a missing value — ``NaN``, ``NaT``, ``pd.NA`` — is a blank
+    cell. (``write_sheet(path, df)`` would not do: iterating a DataFrame yields its column
+    names.) Needs pandas (``pip install "pyhandlexl[pandas]"``).
+
+    Raises:
+        ImportError: pandas is not installed.
+        TypeError: *df* isn't a DataFrame, or a ``MultiIndex`` would have to be written.
+    """
+    return _frames.dataframe_to_grid(df, header, index)
 
 
 def show(

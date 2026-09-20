@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import csv
 import os
+import warnings
 from collections.abc import Iterable
 from itertools import zip_longest
 from pathlib import Path
 from secrets import token_hex
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
@@ -29,6 +30,7 @@ from pyhandlexl.validate import (
     check_cell_value,
     check_dimensions,
     check_sheet_name,
+    normalize_cell_value,
     normalize_newlines,
 )
 
@@ -42,6 +44,17 @@ _CSV_SUFFIX = ".csv"
 # The csv module refuses any single field over 131,072 characters unless told otherwise;
 # a CSV "has no size limit" (see the README), so lift it (the largest a C long holds).
 _CSV_FIELD_LIMIT = 2**31 - 1
+
+
+def _keep_text(worksheet: Worksheet, row: list[object]) -> None:
+    """Store any string in the row just appended that starts with ``=`` as text.
+
+    ``Worksheet.append`` makes a formula of it; pyhandlexl doesn't support formulas.
+    """
+    number = cast(Any, worksheet)._current_row  # the row append() just wrote
+    for column, value in enumerate(row, start=1):
+        if isinstance(value, str) and value.startswith("="):
+            mt.store_text(worksheet.cell(row=number, column=column), value)
 
 
 def _active(workbook: Workbook) -> Worksheet:
@@ -76,9 +89,11 @@ def _as_row(row: object) -> list[object]:
 
 
 def _normalized(grid: list[list[object]]) -> list[list[object]]:
-    """*grid* with every string's line breaks stored the way Excel stores them (see
+    """*grid* as cells hold it: numpy and pandas values made plain and every missing value
+    empty (see :func:`~pyhandlexl.validate.normalize_cell_value`), and every string's line
+    breaks stored the way Excel stores them (see
     :func:`~pyhandlexl.validate.normalize_newlines`)."""
-    return [[normalize_newlines(value) for value in row] for row in grid]
+    return [[normalize_newlines(normalize_cell_value(value)) for value in row] for row in grid]
 
 
 def _checked_grid(rows: Iterable[Iterable[object]]) -> list[list[object]]:
@@ -290,17 +305,25 @@ def read_sheet(
             elif sheet in workbook.sheetnames:
                 worksheet = workbook[sheet]
             else:
-                raise SheetNotFoundError(sheet)
+                raise SheetNotFoundError(f"no worksheet named {sheet!r}")
 
             rows = []
-            for raw_row in worksheet.iter_rows(values_only=True):
-                row: list[object] = list(raw_row)
+            formulas: list[str] = []
+            for cells in worksheet.iter_rows():
+                row: list[object] = [cell.value for cell in cells]
+                formulas += [cell.coordinate for cell in cells if cell.data_type == "f"]
                 while row and row[-1] is None:
                     row.pop()
                 rows.append(row)
+            title = worksheet.title
         finally:
             workbook.close()
         fill = None
+        if formulas:
+            warnings.warn(
+                mt.formula_warning(f"sheet {title!r}", formulas),
+                stacklevel=2 + mt.EXTRA_FRAMES.get(),
+            )
 
     if orientation == "columns":
         rows = [list(column) for column in zip_longest(*rows, fillvalue=fill)]
@@ -403,6 +426,7 @@ def write_sheet(
 
         for row in grid:
             worksheet.append(row)
+            _keep_text(worksheet, row)
         atomic_save(workbook, path)
     finally:
         workbook.close()
@@ -509,6 +533,7 @@ def append_rows(
 
         for row in grid:
             worksheet.append(row)
+            _keep_text(worksheet, row)
         atomic_save(workbook, path)
     finally:
         workbook.close()
@@ -555,7 +580,11 @@ def import_csv_to_xl(
         raise FileNotFoundError(f"no file at {csv_path}")
     with csv_path.open(newline="", encoding=encoding) as f:
         grid = [list(row) for row in csv.reader(f)]
-    write_sheet(path, grid, sheet)
+    token = mt.EXTRA_FRAMES.set(1)  # this function sits between the user and write_sheet
+    try:
+        write_sheet(path, grid, sheet)
+    finally:
+        mt.EXTRA_FRAMES.reset(token)
 
 
 def export_xl_to_csv(
@@ -596,7 +625,11 @@ def export_xl_to_csv(
         raise ValueError(f"not a .csv path: {csv_path}")
     if csv_path.exists():
         raise FileExistsError(f"{csv_path} already exists")
-    rows = read_sheet(path, sheet)
+    token = mt.EXTRA_FRAMES.set(1)  # this function sits between the user and read_sheet
+    try:
+        rows = read_sheet(path, sheet)
+    finally:
+        mt.EXTRA_FRAMES.reset(token)
     _write_csv_atomic(csv_path, rows, encoding=encoding)
 
 
@@ -663,7 +696,7 @@ def sheet_kind(path: str | Path, sheet: str) -> SheetKind:
         if mt.is_schema_name(sheet):
             raise mt.reserved_error(sheet, "has no meaningful kind")
         if sheet not in workbook.sheetnames:
-            raise SheetNotFoundError(sheet)
+            raise SheetNotFoundError(f"no worksheet named {sheet!r}")
         schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
         entries = mt.load_schema(workbook)
         kind = mt.sheet_kind(workbook, entries, sheet)
@@ -696,7 +729,7 @@ def clear_all_sheet_data(path: str | Path, sheet: str) -> None:
         if mt.is_schema_name(sheet):
             raise mt.reserved_error(sheet, "cannot be cleared")
         if sheet not in workbook.sheetnames:
-            raise SheetNotFoundError(sheet)
+            raise SheetNotFoundError(f"no worksheet named {sheet!r}")
 
         schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
         entries = mt.load_schema(workbook)
@@ -840,7 +873,7 @@ def delete_sheet(path: str | Path, name: str) -> None:
         if mt.is_schema_name(name):
             raise mt.reserved_error(name, "cannot be deleted")
         if name not in workbook.sheetnames:
-            raise SheetNotFoundError(name)
+            raise SheetNotFoundError(f"no worksheet named {name!r}")
         if len(workbook.sheetnames) == 1:
             raise ValueError("cannot delete the only sheet in the workbook")
         del workbook[name]
@@ -883,7 +916,7 @@ def rename_sheet(path: str | Path, old: str, new: str) -> None:
             if mt.is_schema_name(reserved):
                 raise mt.reserved_error(reserved, "cannot be renamed to or from")
         if old not in workbook.sheetnames:
-            raise SheetNotFoundError(old)
+            raise SheetNotFoundError(f"no worksheet named {old!r}")
         if new != old and new in workbook.sheetnames:
             raise ValueError(f"sheet {new!r} already exists")
         _refuse_case_clash(workbook, new, ignoring=old)

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import warnings
+from contextvars import ContextVar
 from copy import copy
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
@@ -30,12 +31,14 @@ from openpyxl import Workbook
 from openpyxl.cell.cell import Cell
 from openpyxl.comments import Comment
 from openpyxl.styles import Border, Font, PatternFill, Side
+from openpyxl.styles.cell_style import StyleArray
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from pyhandlexl._merge import Snapshot
 from pyhandlexl.column_type import ColumnType
 from pyhandlexl.errors import (
+    FormulaWarning,
     SchemaRebuiltWarning,
     SheetKindError,
     TableExistsError,
@@ -87,6 +90,16 @@ _SCHEMA_TAB_COLOR = "FF0000"
 # warnings.warn depth from rebuild_schema to the user's own line: rebuild_schema (1) <-
 # load_schema (2) <- the public function that called it (3) <- the user's code (4).
 _CALLER_LEVEL = 4
+# A public function that does its work by calling another public one (import_csv_to_xl calls
+# write_sheet) adds one frame; it says so here so the warning still names the user's line.
+EXTRA_FRAMES: ContextVar[int] = ContextVar("pyhandlexl_extra_frames", default=0)
+
+
+def caller_level() -> int:
+    """The ``stacklevel`` that makes a warning name the user's own line."""
+    return _CALLER_LEVEL + EXTRA_FRAMES.get()
+
+
 _SCHEMA_WARNING = (
     "pyhandlexl-managed — do not edit or delete by hand.\n\n"
     "This sheet tracks every named table's location, size, style, "
@@ -266,20 +279,22 @@ def save_schema(workbook: Workbook, entries: dict[str, TableEntry]) -> None:
     ws.append(list(_SCHEMA_HEADER))
     ws["A1"].comment = Comment(_SCHEMA_WARNING, "pyhandlexl")
     for e in entries.values():
-        ws.append(
-            [
-                e.name,
-                e.sheet,
-                e.anchor_row,
-                e.anchor_col,
-                e.n_rows,
-                e.n_cols,
-                _style_to_json(e.style),
-                _column_types_to_json(e.column_types),
-                _datetime_to_str(e.created_at),
-                _datetime_to_str(e.modified_at),
-            ]
-        )
+        row = [
+            e.name,
+            e.sheet,
+            e.anchor_row,
+            e.anchor_col,
+            e.n_rows,
+            e.n_cols,
+            _style_to_json(e.style),
+            _column_types_to_json(e.column_types),
+            _datetime_to_str(e.created_at),
+            _datetime_to_str(e.modified_at),
+        ]
+        ws.append(row)
+        for column, value in enumerate(row, start=1):
+            if isinstance(value, str) and value.startswith("="):  # a table named "=x"
+                store_text(ws.cell(row=ws.max_row, column=column), value)
 
 
 # ------------------------------------------------------------- schema rebuild
@@ -554,7 +569,7 @@ def rebuild_schema(workbook: Workbook) -> dict[str, TableEntry]:
             f"the schema ({by_name[name]}) — skipped, since it's not safe to guess which "
             "one is real; it won't be reachable by name until this is resolved by hand",
             SchemaRebuiltWarning,
-            stacklevel=_CALLER_LEVEL,
+            stacklevel=caller_level(),
         )
 
     by_sheet: dict[str, list[tuple[int, int, str]]] = {}
@@ -595,7 +610,7 @@ def rebuild_schema(workbook: Workbook) -> dict[str, TableEntry]:
         "holding one type comes back restricted to it); creation and modification times "
         "can't be recovered and come back as None.",
         SchemaRebuiltWarning,
-        stacklevel=_CALLER_LEVEL,
+        stacklevel=caller_level(),
     )
     return entries
 
@@ -610,12 +625,73 @@ def read_region(ws: Worksheet, top: int, left: int, height: int, width: int) -> 
     ]
 
 
+def store_text(cell: Any, text: str) -> None:
+    """Store *text* in *cell* as text, even if it starts with ``=``.
+
+    openpyxl turns any string starting with ``=`` into a formula, which Excel would try to
+    calculate (showing ``#NAME?``, or rejecting the file, if it isn't a valid one).
+    pyhandlexl doesn't support formulas, so text stays text: the cell is stored as a
+    string, with Excel's *quote prefix* flag (the invisible apostrophe Excel adds when you
+    type ``'=1+1``) so it stays text if someone edits it.
+    """
+    cell.value = text
+    if cell.data_type == "f":
+        cell.data_type = "s"
+        if cell._style is None:
+            cell._style = StyleArray()
+        cell._style.quotePrefix = 1
+
+
+def find_formulas(ws: Worksheet, top: int, left: int, height: int, width: int) -> list[str]:
+    """The coordinates of the cells in the given block that hold a formula, in sheet order.
+
+    Looks only at the cells the sheet already holds (``iter_rows`` would build a row of
+    cells for every row in the block first, which is a tenth of the time to read a table).
+    """
+    held = cast(Any, ws)._cells  # {(row, column): cell}
+    found = sorted(
+        key
+        for key, cell in held.items()
+        if cell.data_type == "f" and top <= key[0] < top + height and left <= key[1] < left + width
+    )
+    return [held[key].coordinate for key in found]
+
+
+def formula_warning(where: str, refs: list[str]) -> FormulaWarning:
+    """The warning for *refs*, the formula cells found in *where*."""
+    shown = ", ".join(refs[:5]) + (f" and {len(refs) - 5} more" if len(refs) > 5 else "")
+    return FormulaWarning(
+        f"{where} holds {len(refs)} formula cell{'s' if len(refs) != 1 else ''} ({shown}). "
+        "pyhandlexl doesn't support formulas: they are read as their text, and writing that "
+        "text back stores it as text, replacing the formula. Use openpyxl directly to work "
+        "with formulas."
+    )
+
+
 def write_region(ws: Worksheet, top: int, left: int, grid: list[list[object]]) -> None:
+    """Write *grid* with its top-left cell at (*top*, *left*).
+
+    pyhandlexl doesn't support formulas, so a string is always stored as text, even one that
+    starts with ``=`` (see :func:`store_text`).
+    """
     # ws.cell(..., value=None) is a no-op in openpyxl (it means "no value given",
     # not "clear it"), so None must be assigned via .value directly.
     for i, row in enumerate(grid):
         for j, value in enumerate(row):
-            ws.cell(row=top + i, column=left + j).value = cast(Any, value)
+            cell = cast(Any, ws.cell(row=top + i, column=left + j))  # ._style isn't in the stubs
+            # A cell that keeps its style across a write may still carry what its *previous*
+            # value gave it: a date format left on a number would read back as a date, and a
+            # quote prefix left on a formula would stop it being one. Assigning a date, time
+            # or duration sets its number format again; store_text sets the quote prefix.
+            if cell._style is not None:
+                if cell._style.numFmtId:
+                    cell._style.numFmtId = 0
+                if cell._style.quotePrefix:
+                    cell._style.quotePrefix = 0
+            if isinstance(value, str) and value.startswith("="):
+                store_text(cell, value)
+            else:
+                cell.value = cast(Any, value)
 
 
 def clear_region(ws: Worksheet, top: int, left: int, height: int, width: int) -> None:
@@ -631,6 +707,46 @@ def clear_region(ws: Worksheet, top: int, left: int, height: int, width: int) ->
             cell = cast(Any, ws.cell(row=r, column=c))  # ._style isn't in the stubs
             cell.value = None
             cell._style = None
+
+
+def clear_for_rewrite(
+    ws: Worksheet, entry: TableEntry, height: int, width: int, row_limit: int, col_limit: int
+) -> None:
+    """Clear the part of a table's block that is about to be rewritten *and* repainted.
+
+    Like :func:`clear_region` over the block of ``height`` x ``width`` cells at *entry*'s
+    position, except that the cells :func:`stable_extent` says keep their look — local rows
+    below *row_limit* and local columns below *col_limit* — are left as they are, style and
+    all. (:func:`write_region` still resets their number formats.) The marker row is
+    never among them.
+    """
+    top, left = entry.anchor_row, entry.anchor_col
+    for r in range(top, top + height):
+        local_row = r - top - 1  # the marker row is -1, the header row 0
+        first = col_limit if 0 <= local_row < row_limit else 0
+        for c in range(left + first, left + width):
+            cell = cast(Any, ws.cell(row=r, column=c))
+            cell.value = None
+            cell._style = None
+
+
+def stable_extent(
+    entry: TableEntry, new_n_rows: int, new_n_cols: int, new_style: TableStyle
+) -> tuple[int, int]:
+    """How much of *entry*'s block keeps exactly the look it has if it becomes the given size.
+
+    Returns ``(row_limit, col_limit)``: the cell at local row ``r`` (the header row is 0) and
+    local column ``c`` (the label column is 0) is unchanged when ``r < row_limit`` and
+    ``c < col_limit``. Styles belong to positions, not to data — banding depends only on
+    a row's parity, and a border only on whether a cell is in the header, the label column,
+    the last row or the last column — so a cell's look changes only if the style does, or if
+    it was, or now is, on the last row or column. ``(0, 0)`` means repaint everything.
+    """
+    if entry.style != new_style:
+        return 0, 0
+    rows = new_n_rows + 1 if new_n_rows == entry.n_rows else min(new_n_rows, entry.n_rows)
+    cols = new_n_cols + 1 if new_n_cols == entry.n_cols else min(new_n_cols, entry.n_cols)
+    return rows, cols
 
 
 # ----------------------------------------------------------------- painting
@@ -699,15 +815,18 @@ def _paint_data(cell: Cell, style: TableStyle, banded: bool) -> None:
     )
 
 
-def paint_table(ws: Worksheet, entry: TableEntry) -> None:
+def paint_table(ws: Worksheet, entry: TableEntry, row_limit: int = 0, col_limit: int = 0) -> None:
     """(Re)apply entry.style to the table's header row, label column, and data body.
 
-    Always runs the full region, even for TableStyle.NONE — that's what
-    lets switching to it actively clear previous formatting rather than
-    just not adding new formatting on top of stale styling. Called after
-    every create()/write() (so a shape change — a new row or column — is
-    styled as part of the same pass that assembles it) and after every
-    shift_right (so a table moved by a neighbour's growth keeps its look).
+    Runs the full region unless told which cells to leave alone — even for
+    TableStyle.NONE, which is what lets switching to it actively clear previous
+    formatting rather than just not adding new formatting on top of stale styling.
+    Called after every create()/write() (so a shape change — a new row or column — is
+    styled as part of the same pass that assembles it) and after every shift_right (so
+    a table moved by a neighbour's growth keeps its look). ``row_limit``/``col_limit``
+    (from :func:`stable_extent`) skip the cells that already have the look they'd be
+    given — local rows below one and local columns below the other — which the caller
+    has left unchanged.
 
     A table has only a few dozen distinct looks (header/label or data, banded or not, and
     the border variants along its edges), but tens of thousands of cells. Building fresh
@@ -721,11 +840,15 @@ def paint_table(ws: Worksheet, entry: TableEntry) -> None:
     looks: dict[tuple[Any, ...], Any] = {}
 
     def apply(cell: Any, record: Any) -> None:
-        # a date, time or duration was given its number format when its value was written,
-        # and nothing here paints one, so that one field stays the cell's own
-        number_format = cell._style.numFmtId if cell._style else 0  # cleared cells have none
+        # A date, time or duration was given its number format when its value was written,
+        # and text starting with "=" its quote prefix; nothing here paints either, so those
+        # two fields stay the cell's own.
+        own = cell._style  # cleared cells have none
+        number_format = own.numFmtId if own else 0
+        quote_prefix = own.quotePrefix if own else 0
         cell._style = copy(record)
         cell._style.numFmtId = number_format
+        cell._style.quotePrefix = quote_prefix
 
     def weights(r: int, c: int) -> tuple[_Weight, _Weight, _Weight, _Weight] | None:
         return _weights(r, c, entry.n_rows, entry.n_cols) if style.border_color else None
@@ -751,15 +874,15 @@ def paint_table(ws: Worksheet, entry: TableEntry) -> None:
             apply(cell, record)
 
     header_row = entry.anchor_row + 1
-    for c in range(entry.width):
-        head(ws.cell(row=header_row, column=entry.anchor_col + c), 0, c)
-
-    for r in range(1, entry.n_rows + 1):
+    for r in range(entry.n_rows + 1):
         row = header_row + r
-        head(ws.cell(row=row, column=entry.anchor_col), r, 0)
         banded = bool(style.band_fill) and r % 2 == 0
-        for c in range(1, entry.n_cols + 1):
-            data(ws.cell(row=row, column=entry.anchor_col + c), r, c, banded)
+        for c in range(col_limit if r < row_limit else 0, entry.width):
+            cell = ws.cell(row=row, column=entry.anchor_col + c)
+            if r == 0 or c == 0:
+                head(cell, r, c)
+            else:
+                data(cell, r, c, banded)
 
 
 # --------------------------------------------------------- marker verify/heal

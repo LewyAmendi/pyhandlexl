@@ -232,11 +232,26 @@ class TestTemplates:
 
 class TestNeverReplacingAGoodFileWithABadOne:
     def _poisoned_workbook(self) -> Workbook:
-        """A workbook whose sheet XML can't be parsed, built around the value checks."""
-        wb = Workbook()
-        cell = wb.active["A1"]
-        cell._value = "a\ud800b"  # bypass every check on purpose
-        cell.data_type = "s"
+        """A workbook whose sheet XML can't be parsed, though it opens as a workbook.
+
+        Built by rewriting the saved file rather than through a value openpyxl's writer would
+        accept, because a writer that refuses the bad value (lxml's does) would otherwise stop
+        the test from ever producing the file it needs.
+        """
+
+        class Poisoned(Workbook):
+            def save(self, filename):  # type: ignore[override]
+                super().save(filename)
+                with zipfile.ZipFile(filename) as source:
+                    parts = {i.filename: source.read(i.filename) for i in source.infolist()}
+                sheet = "xl/worksheets/sheet1.xml"
+                parts[sheet] = parts[sheet].replace(b"</sheetData>", b"</sheetData><!--\x00-->")
+                with zipfile.ZipFile(filename, "w") as target:
+                    for name, data in parts.items():
+                        target.writestr(name, data)
+
+        wb = Poisoned()
+        wb.active["A1"] = "x"
         return wb
 
     def test_atomic_save_refuses_it_even_though_it_is_a_valid_zip(self, tmp_path):
@@ -632,7 +647,7 @@ class TestRefusedWritesLeaveTheFileUntouched:
         )
 
         refusals = [
-            (CellTypeError, lambda: write_sheet(setup, [[float("nan")]], sheet="Grid")),
+            (CellTypeError, lambda: write_sheet(setup, [[float("inf")]], sheet="Grid")),
             (CellTypeError, lambda: append_rows(setup, [[object()]], sheet="Grid")),
             (SheetNameError, lambda: create_sheet(setup, "a/b")),
             (ValueError, lambda: create_sheet(setup, "Data")),

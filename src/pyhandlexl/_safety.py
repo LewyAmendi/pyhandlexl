@@ -5,14 +5,16 @@ Internal module — not part of the public API.
 
 from __future__ import annotations
 
+import gc
 import os
 import shutil
-import xml.etree.ElementTree as ET
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from secrets import token_hex
 from time import sleep
 from typing import TypeVar
+from xml.parsers import expat
 from zipfile import BadZipFile, ZipFile
 
 from openpyxl import Workbook, load_workbook
@@ -72,15 +74,16 @@ def _is_well_formed(path: Path) -> bool:
     ``is_valid_xlsx`` opens the workbook read-only, which reads worksheets lazily — so
     a sheet holding an XML-illegal character passes it and would replace a good file.
     This streams each part through a real XML parser, which is what actually catches it.
+    The bare expat parser is what ElementTree itself is built on (namespaces on, as there),
+    without building a tree nobody reads — about four times faster on a big sheet.
     """
     try:
         with ZipFile(path) as archive:
             for name in archive.namelist():
                 if name.endswith((".xml", ".rels")):
                     with archive.open(name) as part:
-                        for _, element in ET.iterparse(part):
-                            element.clear()  # keep memory flat on a big sheet
-    except (ET.ParseError, BadZipFile, OSError):
+                        expat.ParserCreate(None, "}").ParseFile(part)
+    except (expat.ExpatError, BadZipFile, OSError):
         return False
     return True
 
@@ -206,4 +209,20 @@ def atomic_save(
         keep_permissions(path, tmp)
         _retry(lambda: os.replace(tmp, path), path=path, retries=retries, delay=delay)
     finally:
+        _discard(tmp)
+
+
+def _discard(tmp: Path) -> None:
+    """Remove the temporary file, without letting a failure to do so hide the real error.
+
+    When the save itself fails part-way, Windows can still see the half-written file as open
+    until its writer is garbage-collected, and refuses to delete it: a ``PermissionError``
+    here would replace whatever actually went wrong. So collect, try once more, and if it
+    still won't go, leave it — the error that matters is the one being raised.
+    """
+    try:
         tmp.unlink(missing_ok=True)
+    except OSError:
+        gc.collect()
+        with suppress(OSError):
+            tmp.unlink(missing_ok=True)
