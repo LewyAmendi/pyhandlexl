@@ -9,15 +9,30 @@ class PyhandlexlError(Exception):
 
 
 class SheetNameError(PyhandlexlError, ValueError):
-    """A worksheet name is empty, too long, or contains illegal characters."""
+    """A worksheet name is unusable: not a string, empty, too long, or containing illegal
+    characters — or already taken (see :class:`SheetExistsError`)."""
+
+
+class SheetExistsError(SheetNameError):
+    """A worksheet with that name — or one differing only by capitalisation, which Excel treats
+    as the same name — already exists. The counterpart of :class:`TableExistsError`, so an
+    idempotent ``create_sheet`` can catch just this. Also a ``SheetNameError`` and a
+    ``ValueError``."""
 
 
 class DimensionError(PyhandlexlError, ValueError):
     """The data has more rows or columns than the .xlsx format allows."""
 
 
-class InvalidFileError(PyhandlexlError):
-    """The file is missing, not a zip, or not a readable .xlsx workbook."""
+class InvalidFileError(PyhandlexlError, ValueError):
+    """The file is not a readable workbook (or CSV): not a zip, damaged, or with a part that
+    won't parse. Also a ``ValueError``."""
+
+
+class MalformedTableError(PyhandlexlError, ValueError):
+    """A named table's cells can't be read as a table — a column header or a row label has
+    been left blank (in Excel, say), and every column and row needs one. The message names the
+    cell. Also a ``ValueError``."""
 
 
 class FileLockedError(PyhandlexlError, OSError):

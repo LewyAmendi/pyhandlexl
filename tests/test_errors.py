@@ -60,6 +60,9 @@ def test_sheet_not_found_error_can_be_caught_as_key_error():
         raise SheetNotFoundError("Sales")
 
 
-def test_invalid_file_error_is_base_only():
+def test_invalid_file_error_is_a_value_error_like_every_parse_failure():
+    # (json.JSONDecodeError and tomllib.TOMLDecodeError are ValueErrors too — and an unreadable CSV
+    # was a ValueError before it became an InvalidFileError)
     assert issubclass(InvalidFileError, PyhandlexlError)
-    assert not issubclass(InvalidFileError, (ValueError, OSError, KeyError))
+    assert issubclass(InvalidFileError, ValueError)
+    assert not issubclass(InvalidFileError, (OSError, KeyError))

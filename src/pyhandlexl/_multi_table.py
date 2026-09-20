@@ -43,8 +43,10 @@ from pyhandlexl._safety import damage_is_invalid, safe_load_readonly
 from pyhandlexl.column_type import ColumnType
 from pyhandlexl.errors import (
     FormulaWarning,
+    MalformedTableError,
     SchemaRebuiltWarning,
     SheetKindError,
+    SheetNameError,
     TableExistsError,
     TableNotFoundError,
 )
@@ -63,7 +65,13 @@ def is_schema_name(name: str) -> bool:
     so a lookalike is never harmless: it would either masquerade as the schema
     sheet or push the real one off its exact name. Surrounding whitespace is
     ignored too, so ``"_pyhandlexl_tables "`` can't slip through.
+
+    Every public function that takes a sheet name asks this first, so it is also where a
+    name that isn't a string is turned away (as ``SheetNameError``, like ``write_sheet``
+    does) instead of failing on ``.strip()``.
     """
+    if not isinstance(name, str):
+        raise SheetNameError(f"sheet name must be a string, got {type(name).__name__}")
     return name.strip().lower() == SCHEMA_SHEET
 
 
@@ -1088,7 +1096,7 @@ def read_table(ws: Any, entry: TableEntry) -> tuple[Snapshot, list[str]]:
     for j, header in enumerate(headers):
         if header == "":
             cell = f"{get_column_letter(entry.anchor_col + 1 + j)}{entry.anchor_row + 1}"
-            raise ValueError(
+            raise MalformedTableError(
                 f"table {entry.name!r} on sheet {entry.sheet!r} can't be read: the column "
                 f"header in cell {cell} is blank, and every column needs a header — fill it "
                 "in (or delete the column) in Excel"
@@ -1096,7 +1104,7 @@ def read_table(ws: Any, entry: TableEntry) -> tuple[Snapshot, list[str]]:
     for i, label in enumerate(labels):
         if label == "":
             cell = f"{get_column_letter(entry.anchor_col)}{entry.anchor_row + 2 + i}"
-            raise ValueError(
+            raise MalformedTableError(
                 f"table {entry.name!r} on sheet {entry.sheet!r} can't be read: the row "
                 f"label in cell {cell} is blank, and every row needs a label — fill it "
                 "in (or delete the row) in Excel"

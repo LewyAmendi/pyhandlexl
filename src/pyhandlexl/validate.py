@@ -104,7 +104,7 @@ def check_dimensions(n_rows: int, n_cols: int) -> None:
         raise DimensionError(f"{n_cols} columns exceeds the .xlsx limit of {MAX_COLUMNS}")
 
 
-def check_cell_value(value: object) -> None:
+def check_cell_value(value: object, /) -> None:
     """Raise CellTypeError if *value* is not something Excel can store in a cell.
 
     Allowed: ``str``, ``int``, ``float``, ``bool``, ``datetime``, ``date``,
@@ -174,8 +174,9 @@ def normalize_newlines(value: object) -> object:
     return value
 
 
-def check_sheet_name(sheet_name: str) -> None:
-    """Raise SheetNameError if *sheet_name* is not a valid Excel worksheet name."""
+def check_sheet_name(name: str, /) -> None:
+    """Raise SheetNameError if *name* is not a valid Excel worksheet name."""
+    sheet_name = name
     if not isinstance(sheet_name, str):
         raise SheetNameError(f"sheet name must be a string, got {type(sheet_name).__name__}")
 
@@ -203,7 +204,7 @@ def check_sheet_name(sheet_name: str) -> None:
         raise SheetNameError("'History' is reserved by Excel and cannot be used as a sheet name")
 
 
-def is_valid_xlsx(path: str | Path) -> bool:
+def is_valid_xlsx(path: str | Path, /) -> bool:
     """Return True only if *path* is a readable .xlsx workbook.
 
     Never raises: every failure mode returns False.

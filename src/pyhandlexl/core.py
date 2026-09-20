@@ -29,7 +29,12 @@ from pyhandlexl._safety import (
     safe_delete,
     safe_load,
 )
-from pyhandlexl.errors import InvalidFileError, SheetKindError, SheetNotFoundError
+from pyhandlexl.errors import (
+    InvalidFileError,
+    SheetExistsError,
+    SheetKindError,
+    SheetNotFoundError,
+)
 from pyhandlexl.table import TableInfo
 from pyhandlexl.validate import (
     check_cell_value,
@@ -121,7 +126,7 @@ def _refuse_case_clash(workbook: Workbook, name: str, *, ignoring: str | None = 
         return
     clash = mt.case_clash([n for n in workbook.sheetnames if n != ignoring], name)
     if clash is not None:
-        raise ValueError(
+        raise SheetExistsError(
             f"a sheet called {clash!r} already exists — Excel treats sheet names as "
             f"case-insensitive, so {name!r} would collide with it"
         )
@@ -136,7 +141,7 @@ def _read_csv_rows(path: Path) -> list[list[str]]:
                 return [list(row) for row in reader]
             except csv.Error as error:
                 # e.g. a NUL byte on Python 3.10 (3.11+ reads it): name the line
-                raise ValueError(
+                raise InvalidFileError(
                     f"{path} is not a readable CSV (line {reader.line_num}): {error}"
                 ) from error
     finally:
@@ -876,7 +881,7 @@ def create_sheet(path: str | Path, name: str) -> None:
         SheetKindError: *name* is the reserved schema sheet's name in any
             capitalisation (``_PYHANDLEXL_TABLES`` would push the real one off
             its exact name, since Excel ignores case).
-        ValueError: a worksheet called *name* already exists — including one that
+        SheetExistsError: a worksheet called *name* already exists — including one that
             differs only by capitalisation, which Excel treats as the same name.
     """
     check_sheet_name(name)
@@ -885,7 +890,7 @@ def create_sheet(path: str | Path, name: str) -> None:
         if mt.is_schema_name(name):
             raise mt.reserved_error(name, "cannot be created")
         if name in workbook.sheetnames:
-            raise ValueError(f"sheet {name!r} already exists")
+            raise SheetExistsError(f"sheet {name!r} already exists")
         _refuse_case_clash(workbook, name)
         workbook.create_sheet(title=name)
         atomic_save(workbook, path)
@@ -944,7 +949,7 @@ def rename_sheet(path: str | Path, old: str, new: str) -> None:
             away would orphan it under a name pyhandlexl no longer
             recognizes, same as deleting it — or *new* is the reserved
             name, which would collide with (or masquerade as) it.
-        ValueError: a different worksheet called *new* already exists, including
+        SheetExistsError: a different worksheet called *new* already exists, including
             one that differs only by capitalisation. Changing just *old*'s own
             capitalisation (``log`` -> ``LOG``) is allowed.
     """
@@ -957,7 +962,7 @@ def rename_sheet(path: str | Path, old: str, new: str) -> None:
         if old not in workbook.sheetnames:
             raise SheetNotFoundError(f"no worksheet named {old!r}")
         if new != old and new in workbook.sheetnames:
-            raise ValueError(f"sheet {new!r} already exists")
+            raise SheetExistsError(f"sheet {new!r} already exists")
         _refuse_case_clash(workbook, new, ignoring=old)
         worksheet = workbook[old]
         if new != old and new.lower() == old.lower():

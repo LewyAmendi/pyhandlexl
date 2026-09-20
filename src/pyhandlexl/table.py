@@ -495,6 +495,23 @@ class Table:
             corner=self._corner,
         )
 
+    @property
+    def row_labels(self) -> list[str]:
+        """The row labels, in order — a copy. Cheap: unlike :attr:`data`, which copies the whole
+        table on every access, this copies only the labels, so it is the one to use in a
+        loop or a membership test (``"Bob" in t.row_labels``)."""
+        return list(self._row_labels)
+
+    @property
+    def column_headers(self) -> list[str]:
+        """The column headers, in order — a copy, and cheap (see :attr:`row_labels`)."""
+        return list(self._column_headers)
+
+    @property
+    def corner(self) -> str:
+        """The value of the corner cell (the top-left of the label/header grid)."""
+        return self._corner
+
     def to_dict(self) -> dict[str, dict[str, object]]:
         """The table as a dict of dicts: row label -> {column header: value}.
 
