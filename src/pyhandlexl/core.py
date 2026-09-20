@@ -12,14 +12,19 @@ from secrets import token_hex
 from typing import Any, Literal, cast
 
 from openpyxl import Workbook
+from openpyxl.cell.read_only import EmptyCell
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet._read_only import ReadOnlyWorksheet
 from openpyxl.worksheet.worksheet import Worksheet
 
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._multi_table import _to_label
 from pyhandlexl._safety import (
     atomic_save,
+    damage_is_invalid,
     ensure_writable,
     keep_permissions,
+    open_for_reading,
     resolve_target,
     safe_delete,
     safe_load,
@@ -60,7 +65,7 @@ def _keep_text(worksheet: Worksheet, row: list[object]) -> None:
 def _active(workbook: Workbook) -> Worksheet:
     """The workbook's active worksheet (``workbook.active`` may be ``None``, or a chart sheet)."""
     sheet = workbook.active
-    if not isinstance(sheet, Worksheet):
+    if not isinstance(sheet, (Worksheet, ReadOnlyWorksheet)):
         raise InvalidFileError("the workbook has no active worksheet to use")
     return sheet
 
@@ -298,7 +303,7 @@ def read_sheet(
         rows: list[list[object]] = [list(r) for r in _read_csv_rows(path)]
         fill: object = ""
     else:
-        workbook = safe_load(path)
+        workbook = open_for_reading(path)
         try:
             if sheet is None:
                 worksheet = _active(workbook)
@@ -309,12 +314,21 @@ def read_sheet(
 
             rows = []
             formulas: list[str] = []
-            for cells in worksheet.iter_rows():
-                row: list[object] = [cell.value for cell in cells]
-                formulas += [cell.coordinate for cell in cells if cell.data_type == "f"]
-                while row and row[-1] is None:
-                    row.pop()
-                rows.append(row)
+            last = 0  # how many rows hold a cell at all, however empty
+            with damage_is_invalid(path):
+                for number, cells in enumerate(mt.all_rows(worksheet), start=1):
+                    row: list[object] = [cell.value for cell in cells]
+                    for position, cell in enumerate(cells, start=1):
+                        if cell.data_type == "f":
+                            formulas.append(f"{get_column_letter(position)}{number}")
+                    if any(type(cell) is not EmptyCell for cell in cells):
+                        last = number
+                    while row and row[-1] is None:
+                        row.pop()
+                    rows.append(row)
+            # A read-only sheet also reports the rows a file lists but gives no cells (what a
+            # deleted table leaves behind); a loaded sheet ends at its last cell. Same here.
+            del rows[last:]
             title = worksheet.title
         finally:
             workbook.close()
@@ -643,7 +657,7 @@ def list_sheets(path: str | Path) -> list[str]:
         FileNotFoundError: no file at *path*.
         InvalidFileError: the file is not a readable .xlsx.
     """
-    workbook = safe_load(path)
+    workbook = open_for_reading(path)  # the names are in workbook.xml: no sheet is parsed
     try:
         return [name for name in workbook.sheetnames if name != mt.SCHEMA_SHEET]
     finally:
@@ -662,6 +676,10 @@ def list_tables(path: str | Path) -> list[str]:
         FileNotFoundError: no file at *path*.
         InvalidFileError: the file is not a readable .xlsx.
     """
+    with mt.cheap_schema(path) as cheap:
+        if cheap is not None:  # the schema sheet is all it takes
+            return list(cheap[1])
+
     workbook = safe_load(path)
     try:
         schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
@@ -691,6 +709,15 @@ def sheet_kind(path: str | Path, sheet: str) -> SheetKind:
             of its name) — it has no
             meaningful kind of its own.
     """
+    with mt.cheap_schema(path) as cheap:
+        if cheap is not None:
+            workbook, entries = cheap
+            if mt.is_schema_name(sheet):
+                raise mt.reserved_error(sheet, "has no meaningful kind")
+            if sheet not in workbook.sheetnames:
+                raise SheetNotFoundError(f"no worksheet named {sheet!r}")
+            return mt.sheet_kind(workbook, entries, sheet)
+
     workbook = safe_load(path)
     try:
         if mt.is_schema_name(sheet):
@@ -746,6 +773,22 @@ def clear_all_sheet_data(path: str | Path, sheet: str) -> None:
         workbook.close()
 
 
+def _table_info(ws: Any, entry: mt.TableEntry) -> TableInfo:
+    """The metadata for the table at *entry*'s (verified) position: its header row is read, to
+    pair each column type with its column's name, and nothing else."""
+    header_row = mt.read_region(ws, entry.anchor_row + 1, entry.anchor_col + 1, 1, entry.n_cols)
+    headers = [_to_label(h) for h in header_row[0]]
+    return TableInfo(
+        created_at=entry.created_at,
+        modified_at=entry.modified_at,
+        n_rows=entry.n_rows,
+        n_cols=entry.n_cols,
+        sheet=entry.sheet,
+        style=entry.style,
+        column_types=dict(zip(headers, entry.column_types, strict=True)),
+    )
+
+
 def table_info(path: str | Path, name: str) -> TableInfo:
     """Metadata for the named table, without reading its actual row data.
 
@@ -763,6 +806,15 @@ def table_info(path: str | Path, name: str) -> TableInfo:
         TableNotFoundError: no such table exists, or its marker cannot be
             found on its recorded sheet.
     """
+    with mt.cheap_schema(path) as cheap:
+        if cheap is not None:
+            workbook, entries = cheap
+            entry = mt.get_entry(entries, name)
+            if entry.sheet in workbook.sheetnames:
+                ws = workbook[entry.sheet]
+                if mt.marker_matches(ws, entry):
+                    return _table_info(ws, entry)
+
     workbook = safe_load(path)
     try:
         schema_existed = mt.SCHEMA_SHEET in workbook.sheetnames
@@ -771,12 +823,7 @@ def table_info(path: str | Path, name: str) -> TableInfo:
         located = mt.verify_or_locate(workbook, entry)
         healed = located != entry
 
-        ws = workbook[located.sheet]
-        header_row = mt.read_region(
-            ws, located.anchor_row + 1, located.anchor_col + 1, 1, located.n_cols
-        )
-        headers = [_to_label(h) for h in header_row[0]]
-        column_types = dict(zip(headers, located.column_types, strict=True))
+        info = _table_info(workbook[located.sheet], located)
 
         if healed:
             entries[name] = located
@@ -784,15 +831,7 @@ def table_info(path: str | Path, name: str) -> TableInfo:
             mt.save_schema(workbook, entries)
             atomic_save(workbook, path)
 
-        return TableInfo(
-            created_at=located.created_at,
-            modified_at=located.modified_at,
-            n_rows=located.n_rows,
-            n_cols=located.n_cols,
-            sheet=located.sheet,
-            style=located.style,
-            column_types=column_types,
-        )
+        return info
     finally:
         workbook.close()
 

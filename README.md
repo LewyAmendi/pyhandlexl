@@ -1186,12 +1186,17 @@ What to know before relying on it, so none of it is a surprise:
   different times; two saves landing in the same instant can still lose one of them.
   Serialise writers yourself if that can happen.
 - **Every write loads and re-saves the whole workbook,** so its cost follows the size of
-  the *file*, not of your edit. Roughly, on an ordinary Windows machine, for a table of
-  4,000 rows × 8 columns: reading it takes about half a second, and editing one cell and
-  writing it back about 1.7 seconds. A small workbook takes milliseconds. It is meant for
-  thousands of rows, not hundreds of thousands — and for a plain grid, `append_rows` costs
-  only what the new rows cost. Installing [lxml](https://lxml.de/) (`pip install
-  "pyhandlexl[fast]"`) makes writes about a quarter faster; nothing else changes.
+  the *file*, not of your edit: on an ordinary Windows machine, editing one cell of a table
+  of 4,000 rows × 8 columns and writing it back takes about 1.5 seconds. A small workbook
+  takes milliseconds.
+- **A read only parses the sheets it needs.** Reading a table, listing tables or sheets,
+  or asking a sheet's kind opens the workbook read-only, so a workbook of several big
+  sheets costs a small table's read (about 25 ms) rather than the whole file's — but the
+  cost of reading *one* big sheet is what it is: about 0.4 seconds for that same 4,000 × 8
+  table, which is as fast as openpyxl parses. It is meant for thousands of rows, not
+  hundreds of thousands — and for a plain grid, `append_rows` costs only what the new rows
+  cost. Installing [lxml](https://lxml.de/) (`pip install "pyhandlexl[fast]"`) makes
+  writes about a quarter faster; reads are unaffected.
 - **The whole table is held in memory,** as Python objects.
 - **Excel must not have the file open on Windows** — a write retries for a moment, then
   raises `FileLockedError`. On macOS and Linux nothing stops a save from replacing a file

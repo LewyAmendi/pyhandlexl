@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import copy
 from dataclasses import asdict, dataclass, replace
@@ -35,7 +37,9 @@ from openpyxl.styles.cell_style import StyleArray
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from pyhandlexl import _safety
 from pyhandlexl._merge import Snapshot
+from pyhandlexl._safety import damage_is_invalid, safe_load_readonly
 from pyhandlexl.column_type import ColumnType
 from pyhandlexl.errors import (
     FormulaWarning,
@@ -218,9 +222,54 @@ def load_schema(workbook: Workbook) -> dict[str, TableEntry]:
     """
     if SCHEMA_SHEET not in workbook.sheetnames:
         return rebuild_schema(workbook)
-    ws = workbook[SCHEMA_SHEET]
+    return _parse_schema(workbook[SCHEMA_SHEET])
+
+
+@contextmanager
+def cheap_schema(path: Any) -> Iterator[tuple[Workbook, dict[str, TableEntry]] | None]:
+    """A read-only workbook and its schema, for a read that needs nothing else — or ``None``.
+
+    ``None`` means the read can't be done this way and has to load the whole workbook: the
+    schema sheet is missing (so it must be rebuilt, which scans every sheet and saves), or
+    reads have been switched to full loads. Anything a read might have to *repair* is left to
+    that full path, which is unchanged. The workbook is closed when the block ends, so do
+    any fallback after it, not inside.
+    """
+    if not _safety.READ_ONLY_READS:
+        yield None
+        return
+    workbook = safe_load_readonly(path)
+    try:
+        with damage_is_invalid(path):
+            if SCHEMA_SHEET not in workbook.sheetnames:
+                yield None
+            else:
+                yield workbook, _parse_schema(workbook[SCHEMA_SHEET])
+    finally:
+        workbook.close()
+
+
+def all_rows(ws: Any, *, values_only: bool = False, min_row: int | None = None) -> Any:
+    """Every row of *ws* (from *min_row*, if given), however the file records its size.
+
+    A read-only sheet trusts the ``<dimension>`` the file declares, and some writers declare
+    it wrongly (or not at all), which would silently cut rows off; resetting it makes the
+    sheet read to its real end. *min_row* is passed on only when given: on a loaded sheet,
+    ``iter_rows()`` of an empty one yields nothing, but naming a row makes openpyxl create
+    cells for it — so asking for "row 1" would change the sheet, and the next ``append``
+    would land a row too low.
+    """
+    reset = getattr(ws, "reset_dimensions", None)
+    if reset is not None:
+        reset()
+    if min_row is None:
+        return ws.iter_rows(values_only=values_only)
+    return ws.iter_rows(min_row=min_row, values_only=values_only)
+
+
+def _parse_schema(ws: Any) -> dict[str, TableEntry]:
     entries: dict[str, TableEntry] = {}
-    for row in ws.iter_rows(min_row=2, values_only=True):
+    for row in all_rows(ws, values_only=True, min_row=2):
         if not row or row[0] is None:
             continue
         # Schemas written by older versions have fewer columns (7 before column
@@ -618,11 +667,44 @@ def rebuild_schema(workbook: Workbook) -> dict[str, TableEntry]:
 # ------------------------------------------------------------- region access
 
 
-def read_region(ws: Worksheet, top: int, left: int, height: int, width: int) -> list[list[object]]:
-    return [
-        [ws.cell(row=r, column=c).value for c in range(left, left + width)]
-        for r in range(top, top + height)
-    ]
+def read_block(
+    ws: Any, top: int, left: int, height: int, width: int
+) -> tuple[list[list[object]], list[str]]:
+    """A block of cells as ``(values, formulas)``: the values, and the coordinates of the cells
+    that hold a formula (whose value is then the formula's text). One pass, and it works on a
+    read-only sheet as well as a loaded one — ``ws.cell()`` would re-read a read-only sheet
+    from the top for every cell."""
+    values: list[list[object]] = []
+    formulas: list[str] = []
+    reset = getattr(ws, "reset_dimensions", None)
+    if reset is not None:  # a read-only sheet: don't trust the size the file declares
+        reset()
+    rows = ws.iter_rows(
+        min_row=top, max_row=top + height - 1, min_col=left, max_col=left + width - 1
+    )
+    for i, row in enumerate(rows):
+        line: list[object] = []
+        for j, cell in enumerate(row):
+            line.append(cell.value)
+            if cell.data_type == "f":
+                formulas.append(f"{get_column_letter(left + j)}{top + i}")
+        # Ask for `width` cells and you get them; a short row is padded.
+        line.extend([None] * (width - len(line)))
+        values.append(line)
+    # A read-only sheet stops at the last row it holds, however many were asked for (a row
+    # deleted in Excel leaves the block longer than the data): the rest are blank rows.
+    values.extend([None] * width for _ in range(height - len(values)))
+    return values, formulas
+
+
+def read_region(ws: Any, top: int, left: int, height: int, width: int) -> list[list[object]]:
+    return read_block(ws, top, left, height, width)[0]
+
+
+def marker_matches(ws: Any, entry: TableEntry) -> bool:
+    """Whether *entry*'s recorded position still holds its marker and name."""
+    (marker, name), *_ = read_region(ws, entry.anchor_row, entry.anchor_col, 1, 2)
+    return bool(marker == MARKER and name == entry.name)
 
 
 def store_text(cell: Any, text: str) -> None:
@@ -640,21 +722,6 @@ def store_text(cell: Any, text: str) -> None:
         if cell._style is None:
             cell._style = StyleArray()
         cell._style.quotePrefix = 1
-
-
-def find_formulas(ws: Worksheet, top: int, left: int, height: int, width: int) -> list[str]:
-    """The coordinates of the cells in the given block that hold a formula, in sheet order.
-
-    Looks only at the cells the sheet already holds (``iter_rows`` would build a row of
-    cells for every row in the block first, which is a tenth of the time to read a table).
-    """
-    held = cast(Any, ws)._cells  # {(row, column): cell}
-    found = sorted(
-        key
-        for key, cell in held.items()
-        if cell.data_type == "f" and top <= key[0] < top + height and left <= key[1] < left + width
-    )
-    return [held[key].coordinate for key in found]
 
 
 def formula_warning(where: str, refs: list[str]) -> FormulaWarning:
@@ -898,10 +965,7 @@ def verify_or_locate(workbook: Workbook, entry: TableEntry) -> TableEntry:
     if entry.sheet not in workbook.sheetnames:
         raise TableNotFoundError(f"table {entry.name!r}: sheet {entry.sheet!r} no longer exists")
     ws = workbook[entry.sheet]
-    if (
-        ws.cell(entry.anchor_row, entry.anchor_col).value == MARKER
-        and ws.cell(entry.anchor_row, entry.anchor_col + 1).value == entry.name
-    ):
+    if marker_matches(ws, entry):
         return entry
 
     for r in range(1, ws.max_row + 1):
@@ -952,7 +1016,7 @@ def sheet_kind(workbook: Workbook, entries: dict[str, TableEntry], sheet: str) -
     if any(e.sheet == sheet for e in entries.values()):
         return "table"
     ws = workbook[sheet]
-    if any(value is not None for row in ws.iter_rows(values_only=True) for value in row):
+    if any(value is not None for row in all_rows(ws, values_only=True) for value in row):
         return "grid"
     return "empty"
 
@@ -1008,9 +1072,15 @@ def shift_right(
 # ------------------------------------------------- reading a table's state
 
 
-def read_snapshot(ws: Worksheet, entry: TableEntry) -> Snapshot:
+def read_snapshot(ws: Any, entry: TableEntry) -> Snapshot:
     """The table at *entry*'s (already verified) position, as a file-independent snapshot."""
-    block = read_region(
+    return read_table(ws, entry)[0]
+
+
+def read_table(ws: Any, entry: TableEntry) -> tuple[Snapshot, list[str]]:
+    """The table at *entry*'s (already verified) position as ``(snapshot, formulas)``, the
+    second being the coordinates of any formula cells found in it."""
+    block, formulas = read_block(
         ws, entry.anchor_row + 1, entry.anchor_col, entry.n_rows + 1, entry.n_cols + 1
     )
     headers = [_to_label(h) for h in block[0][1:]]
@@ -1031,7 +1101,7 @@ def read_snapshot(ws: Worksheet, entry: TableEntry) -> Snapshot:
                 f"label in cell {cell} is blank, and every row needs a label — fill it "
                 "in (or delete the row) in Excel"
             )
-    return Snapshot(
+    snapshot = Snapshot(
         row_labels=labels,
         column_headers=headers,
         data=[list(row[1:]) for row in block[1:]],
@@ -1039,3 +1109,4 @@ def read_snapshot(ws: Worksheet, entry: TableEntry) -> Snapshot:
         style=entry.style,
         column_types=list(entry.column_types),
     )
+    return snapshot, formulas
