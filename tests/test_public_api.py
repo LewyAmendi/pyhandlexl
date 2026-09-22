@@ -143,7 +143,7 @@ EXPECTED = [
     "  def set_column_type(self, header: 'str', column_type: 'ColumnType') -> 'None'",
     "  def set_corner(self, value: 'str') -> 'None'",
     "  def set_row(self, label: 'str', values: 'Iterable[object]') -> 'None'",
-    "  def show(self, *, rows: 'int | None' = None, head: 'int | None' = 5, tail: 'int | None' = 5) -> 'None'",
+    "  def show(self, *, rows: 'int | None' = None, head: 'int | None' = 5, tail: 'int | None' = 5) -> 'str'",
     "  property style (settable)",
     "  def to_dataframe(self) -> 'Any'",
     "  def to_dict(self) -> 'dict[str, dict[str, object]]'",
@@ -218,7 +218,7 @@ EXPECTED = [
     "def grid.set_column(grid: 'Iterable[Iterable[object]]', col: 'int', values: 'Iterable[object]') -> 'Grid'",
     "def grid.set_row(grid: 'Iterable[Iterable[object]]', row: 'int', values: 'Iterable[object]') -> 'Grid'",
     "def grid.set_value(grid: 'Iterable[Iterable[object]]', row: 'int', col: 'int', value: 'object') -> 'Grid'",
-    "def grid.show(grid: 'Iterable[Iterable[object]]', *, rows: 'int | None' = None, head: 'int | None' = 5, tail: 'int | None' = 5) -> 'None'",
+    "def grid.show(grid: 'Iterable[Iterable[object]]', *, rows: 'int | None' = None, head: 'int | None' = 5, tail: 'int | None' = 5) -> 'str'",
     "def grid.to_dataframe(grid: 'Iterable[Iterable[object]]', *, header: 'bool' = True) -> 'Any'",
     "def grid.transpose(grid: 'Iterable[Iterable[object]]') -> 'Grid'",
 ]

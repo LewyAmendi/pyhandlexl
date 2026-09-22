@@ -431,7 +431,7 @@ are styled. It has no effect on `.csv` files — there's nothing there to style.
 
 A column defaults to accepting any type `check_cell_value` allows — restrict
 one to a single Excel-native type instead, and a value that doesn't match
-raises `ColumnTypeError` on the next `create()`/`write()`:
+raises `ColumnTypeError` the moment you try to set it:
 
 ```python
 from pyhandlexl import Table, ColumnType
@@ -457,12 +457,25 @@ blank cell (`None`) is always allowed regardless of a column's type — the
 restriction governs what a real value may be, not whether the cell has been
 filled in yet.
 
-Checked the same time as `CellTypeError` — a value can be a type Excel can
-store at all, and still fail this because it isn't the type *this* column
-was restricted to. Restricting a column doesn't touch data already in it
-until the next `create()`/`write()`; renaming, inserting, or dropping a
-column moves or drops its restriction along with it, and a newly inserted
-column always starts as `ColumnType.ANY`. If the reserved schema sheet is
+A value can be a type Excel can store at all, and still fail this because
+it isn't the type *this* column was restricted to.
+
+**Checked immediately, not on the next write.** `set_column_type` checks the
+column's *existing* data right away, and refuses (leaving the restriction
+unapplied) if a value already there doesn't fit. Every method that sets or adds
+data — `set_cell`, `set_row`, `set_column`, `add_row`/`insert_row` — checks the
+value it's given against the target column's restriction the same way, so a
+value that doesn't fit is rejected the moment you try to set it, not on the
+next `create()`/`write()`; nothing changes when it's rejected. Two things are
+still only checked at `write()`, because neither goes through an edit at all:
+a restriction that arrives from another writer, through a
+[merge](#two-people-editing-the-same-table), and a value that was already
+there — say, a cell someone edited in Excel after the restriction was set —
+when the table was [read](#reading).
+
+Renaming, inserting, or dropping a column moves or drops its restriction along
+with it, and a newly inserted column always starts as `ColumnType.ANY`. If the
+reserved schema sheet is
 deleted and rebuilt from markers (see
 [Multiple named tables on one sheet](#multiple-named-tables-on-one-sheet)),
 restrictions are **inferred** from what each column currently holds rather
@@ -707,14 +720,25 @@ t.show(head=2, tail=2)        # first 2 and last 2 rows
 t.show(head=None, tail=None)  # every row, no truncation
 ```
 
+```
++-------+----+----+
+| name  | q1 | q2 |
++-------+----+----+
+| Alice | 10 | 20 |
+| Bob   | 30 | 40 |
++-------+----+----+
+```
+
 The default (`head=5, tail=5`) shows everything with no divider if the table
 has 10 rows or fewer — truncation only kicks in past that. `rows=` overrides
-the head/tail defaults outright. Prints a plain, aligned, whitespace-padded
-grid to the console — a debug convenience, unrelated to cell formatting in the
-`.xlsx` (still out of scope; see [Not in scope](#not-in-scope)). `rows`,
-`head`, and `tail` must each be a non-negative `int` or `None` — a negative
-value raises `ValueError` and a non-`int` raises `TypeError`, rather than
-silently doing something confusing with Python's slice semantics.
+the head/tail defaults outright. Prints a bordered, column-aligned grid to the
+console **and returns that same text** — a debug convenience, unrelated to
+cell formatting in the `.xlsx` (still out of scope; see [Not in
+scope](#not-in-scope)). A value's own newlines are shown as `\n` rather than
+left as real line breaks, which would otherwise split a row across lines.
+`rows`, `head`, and `tail` must each be a non-negative `int` or `None` — a
+negative value raises `ValueError` and a non-`int` raises `TypeError`, rather
+than silently doing something confusing with Python's slice semantics.
 
 ## Unorganised data: the grid layout
 
@@ -855,10 +879,12 @@ grid.show(g, head=2, tail=2)      # first 2 and last 2 rows
 grid.show(g, head=None, tail=None)  # every row, no truncation
 ```
 
-Prints a plain, aligned, whitespace-padded block to the console — a debug
-convenience, with the same truncation rules (and the same `rows`/`head`/`tail`
-validation) as [`Table.show`](#displaying-a-table). Ragged rows are padded
-with `""` for display only; the grid itself is untouched.
+Prints a bordered, column-aligned block to the console and returns that same
+text — a debug convenience, with the same truncation rules (and the same
+`rows`/`head`/`tail` validation, and newline handling) as
+[`Table.show`](#displaying-a-table), minus the header row (a grid has no
+headers to show). Ragged rows are padded with `""` for display only; the grid
+itself is untouched.
 
 ## Moving data between CSV and .xlsx
 
@@ -1209,17 +1235,20 @@ What to know before relying on it, so none of it is a surprise:
   different times; two saves landing in the same instant can still lose one of them.
   Serialise writers yourself if that can happen.
 - **Every write loads and re-saves the whole workbook,** so its cost follows the size of
-  the *file*, not of your edit: on an ordinary Windows machine, editing one cell of a table
-  of 4,000 rows × 8 columns and writing it back takes about 1.5 seconds. A small workbook
-  takes milliseconds.
+  the *file*, not of your edit — writing back a single changed cell of a table costs about
+  the same as writing the whole table fresh; there is no partial write. Repainting only
+  what changed, rather than the whole table, cuts that by about 16%, but the save itself
+  still scales with the size of the file, not the size of the edit — a small workbook
+  writes in a small fraction of the time a large one does.
 - **A read only parses the sheets it needs.** Reading a table or a sheet, listing tables
-  or sheets, or asking a sheet's kind opens the workbook read-only, so a workbook of
-  several big sheets costs a small table's read (about 25 ms) rather than the whole
-  file's — but the
-  cost of reading *one* big sheet is what it is: about 0.4 seconds for that same 4,000 × 8
-  table, which is as fast as openpyxl parses. It is meant for thousands of rows, not
-  hundreds of thousands — and for a plain grid, `append_rows` costs only what the new rows
-  cost. Installing [lxml](https://lxml.de/) (`pip install "pyhandlexl[fast]"`) makes
+  or sheets, or asking a sheet's kind opens the workbook read-only, so on a workbook of
+  several big sheets, reading one small table — or listing what's in it — commonly costs
+  well under 2% of loading the whole file (40 to over 100 times faster, depending on how
+  many sheets there are and what you ask for). Reading a *big* sheet itself gains much
+  less: that read is bound by how fast the underlying parser gets through the cells, not
+  by how much of the rest of the workbook you skipped. It is meant for thousands of rows,
+  not hundreds of thousands — and for a plain grid, `append_rows` costs only what the new
+  rows cost. Installing [lxml](https://lxml.de/) (`pip install "pyhandlexl[fast]"`) makes
   writes about a quarter faster; reads are unaffected.
 - **The whole table is held in memory,** as Python objects.
 - **Excel must not have the file open on Windows** — a write retries for a moment, then

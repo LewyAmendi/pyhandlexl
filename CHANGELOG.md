@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Column-type restrictions are checked immediately, not on the next `write()`/`create()`.**
+  `set_column_type` now checks the column's existing data right away and raises
+  `ColumnTypeError` without applying the restriction if a value doesn't fit. Every mutator
+  that sets or adds data — `set_cell`, `set_row`, `set_column`, `add_row`/`insert_row` — now
+  checks the value it's given the same way, so a bad value is rejected the moment you try to
+  set it, leaving the table exactly as it was. Declaring `column_types=` at construction with
+  data that already violates it now raises there too. The one restriction still caught at
+  `write()` is one that arrived from another writer through a merge — that safety net is
+  unchanged.
+- **`Table.show()` and `grid.show()` return the text they print,** bordered and
+  column-aligned (`+`/`-`/`|`) instead of the previous whitespace-separated columns, with a
+  rule under the table's header row. A value's own newline or carriage return is now shown
+  as `\n` rather than left as a real line break, which would otherwise split a bordered row
+  and break the layout.
+
 ## [0.9.8] — 2026-09-20
 
 The last feature release before 1.0. There is no 0.9.7 (that number was only a working

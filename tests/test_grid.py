@@ -147,56 +147,61 @@ class TestShape:
         assert grid.transpose([]) == []
 
 
+def _content_lines(text: str) -> list[str]:
+    """The bordered block's cell rows — the rule lines start with '+'."""
+    return [line for line in text.splitlines() if line.startswith("|")]
+
+
 class TestShow:
-    def test_show_all(self, g, capsys):
-        grid.show(g)
-        out = capsys.readouterr().out
-        assert "a" in out and "i" in out
+    def test_returns_the_text_it_prints(self, g, capsys):
+        text = grid.show(g)
+        assert text and capsys.readouterr().out.strip() == text
 
-    def test_show_rows_limits_output(self, capsys):
+    def test_bordered_top_and_bottom(self, g):
+        lines = grid.show(g).splitlines()
+        assert lines[0] == lines[-1]  # the same rule, top and bottom
+        assert lines[0].startswith("+") and lines[0].endswith("+")
+        assert len(_content_lines(grid.show(g))) == 3  # no header row for a plain grid
+
+    def test_show_all(self, g):
+        text = grid.show(g)
+        assert "a" in text and "i" in text
+
+    def test_show_rows_limits_output(self):
         g = [[i] for i in range(5)]
-        grid.show(g, rows=2)
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert len(lines) == 2
+        assert len(_content_lines(grid.show(g, rows=2))) == 2
 
-    def test_show_head_tail_inserts_divider(self, capsys):
+    def test_show_head_tail_inserts_divider(self):
         g = [[i] for i in range(10)]
-        grid.show(g, head=2, tail=2)
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert len(lines) == 5  # 2 head + divider + 2 tail
-        assert "..." in lines[2]
+        content = _content_lines(grid.show(g, head=2, tail=2))
+        assert len(content) == 5  # 2 head + divider + 2 tail
+        assert "..." in content[2]
 
-    def test_show_head_tail_no_divider_when_it_would_cover_everything(self, capsys):
-        g = [[1], [2]]
-        grid.show(g, head=2, tail=2)
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert not any("..." in line for line in lines)
+    def test_show_head_tail_no_divider_when_it_would_cover_everything(self):
+        assert "..." not in grid.show([[1], [2]], head=2, tail=2)
 
-    def test_default_truncates_to_head_and_tail_5(self, capsys):
+    def test_default_truncates_to_head_and_tail_5(self):
         g = [[i] for i in range(12)]
-        grid.show(g)
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert len(lines) == 11  # 5 head + divider + 5 tail
-        assert "..." in lines[5]
-        assert lines[0].strip() == "0"
-        assert lines[-1].strip() == "11"
+        content = _content_lines(grid.show(g))
+        assert len(content) == 11  # 5 head + divider + 5 tail
+        assert "..." in content[5]
+        assert "0" in content[0]
+        assert "11" in content[-1]
 
-    def test_default_shows_everything_when_10_rows_or_fewer(self, capsys):
+    def test_default_shows_everything_when_10_rows_or_fewer(self):
         g = [[i] for i in range(8)]
-        grid.show(g)
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert len(lines) == 8
-        assert not any("..." in line for line in lines)
+        text = grid.show(g)
+        assert len(_content_lines(text)) == 8
+        assert "..." not in text
 
     def test_show_empty_grid(self, capsys):
-        grid.show([])
-        assert "empty" in capsys.readouterr().out
+        text = grid.show([])
+        assert "empty" in text and text == capsys.readouterr().out.strip()
 
-    def test_show_ragged_rows_pads_for_display(self, capsys):
-        grid.show([[1, 2, 3], [1]])
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert len(lines) == 2
-        assert lines[0].split() == ["1", "2", "3"]
+    def test_show_ragged_rows_pads_for_display(self):
+        content = _content_lines(grid.show([[1, 2, 3], [1]]))
+        assert len(content) == 2
+        assert content[0].split("|")[1:4] == [" 1 ", " 2 ", " 3 "]
 
     def test_negative_rows_raises(self, g):
         with pytest.raises(ValueError):

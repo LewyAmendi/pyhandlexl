@@ -268,67 +268,85 @@ class TestNamedTableAndGridLayoutCoexist:
         assert list_tables(data_sheet) == ["Sales"]
 
 
+def _content_lines(text: str) -> list[str]:
+    """The bordered block's cell rows (header + data) — the rule lines start with '+'."""
+    return [line for line in text.splitlines() if line.startswith("|")]
+
+
 class TestShow:
-    def test_show_all(self, capsys):
+    def test_returns_the_text_it_prints(self, capsys):
         t = Table(
             data=[[1], [2]], column_headers=["v"], row_labels=["a", "b"], corner="#", name="T"
         )
-        t.show()
-        out = capsys.readouterr().out
-        assert "a" in out and "b" in out and "v" in out
+        text = t.show()
+        assert text and capsys.readouterr().out.strip() == text
 
-    def test_show_rows_limits_output(self, capsys):
+    def test_bordered_with_a_rule_under_the_header(self):
+        t = Table(data=[[1], [2]], column_headers=["v"], row_labels=["a", "b"], name="T")
+        lines = t.show().splitlines()
+        rules = [line for line in lines if line.startswith("+")]
+        assert len(rules) == 3  # top, under the header, bottom
+        assert rules[0] == rules[1] == rules[2]
+        assert len(_content_lines(t.show())) == 3  # header + 2 data rows
+
+    def test_show_all(self):
+        t = Table(
+            data=[[1], [2]], column_headers=["v"], row_labels=["a", "b"], corner="#", name="T"
+        )
+        text = t.show()
+        assert "a" in text and "b" in text and "v" in text and "#" in text
+
+    def test_show_rows_limits_output(self):
         t = Table(
             data=[[i] for i in range(5)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(5)],
             name="T",
         )
-        t.show(rows=2)
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert len(lines) == 3  # header + 2 data rows
+        text = t.show(rows=2)
+        assert len(_content_lines(text)) == 3  # header + 2 data rows
+        assert "r2" not in text
 
-    def test_show_head_tail_inserts_divider(self, capsys):
+    def test_show_head_tail_inserts_divider(self):
         t = Table(
             data=[[i] for i in range(10)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(10)],
             name="T",
         )
-        t.show(head=2, tail=2)
-        lines = capsys.readouterr().out.strip().splitlines()
+        text = t.show(head=2, tail=2)
+        content = _content_lines(text)
         # header + 2 head rows + divider + 2 tail rows
-        assert len(lines) == 6
-        assert "..." in lines[3]
+        assert len(content) == 6
+        assert "..." in content[3]
+        assert "r2" not in text and "r7" not in text
 
-    def test_show_head_tail_no_divider_when_it_would_cover_everything(self, capsys):
+    def test_show_head_tail_no_divider_when_it_would_cover_everything(self):
         t = Table(data=[[1], [2]], column_headers=["v"], row_labels=["a", "b"], name="T")
-        t.show(head=2, tail=2)
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert not any("..." in line for line in lines)
+        assert "..." not in t.show(head=2, tail=2)
 
-    def test_show_table_with_no_rows_yet(self, capsys):
+    def test_show_table_with_no_rows_yet(self):
         # column_headers is mandatory, so there's always at least a header
         # row to show, even before the first add_row()
-        Table(data=[], column_headers=["v"], name="T").show()
-        out = capsys.readouterr().out
-        assert "v" in out
+        text = Table(data=[], column_headers=["v"], name="T").show()
+        assert "v" in text
+        assert len(_content_lines(text)) == 1  # just the header
 
-    def test_default_truncates_to_head_and_tail_5(self, capsys):
+    def test_default_truncates_to_head_and_tail_5(self):
         t = Table(
             data=[[i] for i in range(12)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(12)],
             name="T",
         )
-        t.show()  # no args — should default to head=5, tail=5
-        lines = capsys.readouterr().out.strip().splitlines()
+        text = t.show()  # no args — should default to head=5, tail=5
+        content = _content_lines(text)
         # header + 5 head rows + divider + 5 tail rows
-        assert len(lines) == 12
-        assert "..." in lines[6]
-        assert "r0 " in lines[1]
-        assert "r11" in lines[-1]
-        assert not any("r5" in line or "r6" in line for line in lines)
+        assert len(content) == 12
+        assert "..." in content[6]
+        assert "r0" in content[1]
+        assert "r11" in content[-1]
+        assert not any("r5" in line or "r6" in line for line in content)
 
     def test_negative_rows_raises(self):
         t = Table(data=[[1]], column_headers=["v"], row_labels=["a"], name="T")
@@ -344,39 +362,36 @@ class TestShow:
         with pytest.raises(TypeError):
             t.show(head="a")
 
-    def test_default_shows_everything_when_10_rows_or_fewer(self, capsys):
+    def test_default_shows_everything_when_10_rows_or_fewer(self):
         t = Table(
             data=[[i] for i in range(8)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(8)],
             name="T",
         )
-        t.show()
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert len(lines) == 9  # header + all 8 rows, no divider
-        assert not any("..." in line for line in lines)
+        text = t.show()
+        assert len(_content_lines(text)) == 9  # header + all 8 rows, no divider
+        assert "..." not in text
 
-    def test_head_none_tail_none_shows_everything_explicitly(self, capsys):
+    def test_head_none_tail_none_shows_everything_explicitly(self):
         t = Table(
             data=[[i] for i in range(20)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(20)],
             name="T",
         )
-        t.show(head=None, tail=None)
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert len(lines) == 21  # header + all 20 rows
+        text = t.show(head=None, tail=None)
+        assert len(_content_lines(text)) == 21  # header + all 20 rows
 
-    def test_rows_overrides_the_head_tail_defaults(self, capsys):
+    def test_rows_overrides_the_head_tail_defaults(self):
         t = Table(
             data=[[i] for i in range(20)],
             column_headers=["v"],
             row_labels=[f"r{i}" for i in range(20)],
             name="T",
         )
-        t.show(rows=3)
-        lines = capsys.readouterr().out.strip().splitlines()
-        assert len(lines) == 4  # header + 3 rows, head/tail defaults ignored
+        text = t.show(rows=3)
+        assert len(_content_lines(text)) == 4  # header + 3 rows, head/tail defaults ignored
 
 
 class TestSchemaSheetIsHidden:
