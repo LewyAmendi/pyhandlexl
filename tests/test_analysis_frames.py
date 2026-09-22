@@ -144,13 +144,12 @@ class TestToDataFrame:
         ]
 
     def test_a_value_that_does_not_fit_its_column_type_keeps_its_inferred_dtype(self):
-        t = Table(
-            data=[["text"], [1]],
-            row_labels=["a", "b"],
-            column_headers=["n"],
-            name="T",
-            column_types={"n": ColumnType.DATE},  # nothing stops this until write()
-        )
+        # a column's restriction and its data can still disagree if the file had already
+        # drifted apart before it was read (Table.read carries the restriction over as-is,
+        # without checking it against the data — see test_hand_edited_workbooks.py); bypass
+        # the constructor's own check to set up that same state directly
+        t = Table(data=[["text"], [1]], row_labels=["a", "b"], column_headers=["n"], name="T")
+        t._column_types[0] = ColumnType.DATE
         assert t.to_dataframe()["n"].tolist() == ["text", 1]
 
     def test_whole_number_floats_come_back_as_int64_because_excel_has_one_number_kind(self, book):
@@ -246,12 +245,10 @@ class TestFromDataFrame:
             t.column_types["qty"] is ColumnType.ANY and t.column_types["price"] is ColumnType.NUMBER
         )
 
-    def test_inferred_types_are_enforced_on_write(self, book):
-        create_sheet(book, "D")
+    def test_inferred_types_are_enforced_immediately(self):
         t = Table.from_dataframe(a_typical_frame(), name="T", infer_column_types=True)
-        t.set_cell(row="r0", column="qty", value="not a number")
         with pytest.raises(ColumnTypeError):
-            t.create(book, sheet="D")
+            t.set_cell(row="r0", column="qty", value="not a number")
 
     def test_a_timezone_aware_column_is_refused_at_write_with_a_clear_reason(self, book):
         df = pd.DataFrame({"t": pd.date_range("2026-01-01", periods=2, tz="UTC")}, index=["a", "b"])

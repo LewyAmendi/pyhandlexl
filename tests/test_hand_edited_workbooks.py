@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 
 from pyhandlexl import (
     ColumnType,
+    ColumnTypeError,
     FormulaWarning,
     SchemaRebuiltWarning,
     Table,
@@ -344,13 +345,10 @@ class TestVeryWideTables:
         for header, expected in types.items():
             assert back[header] == expected
         assert back["c100"] == ColumnType.ANY
-        # and a restriction is still enforced after the round trip
+        # and a restriction is still enforced after the round trip — immediately, on the edit
         table = Table.read(book, "Wide")
-        table.set_cell(row="r", column="c0", value="not a number")
-        from pyhandlexl import ColumnTypeError
-
         with pytest.raises(ColumnTypeError):
-            table.write(book)
+            table.set_cell(row="r", column="c0", value="not a number")
 
     def test_the_schema_cell_never_exceeds_what_a_cell_can_hold(self, wide_book):
         book = wide_book
@@ -376,3 +374,24 @@ class TestVeryWideTables:
             warnings.simplefilter("ignore", SchemaRebuiltWarning)
             assert list_tables(book) == ["Wide"]
             assert table_info(book, "Wide").n_cols == self.WIDE
+
+
+class TestColumnTypeDriftFromHandEditing:
+    """A restriction doesn't stop an edit made directly in Excel — pyhandlexl never saw it —
+    so a read has to succeed regardless; only the next write() enforces it again."""
+
+    def test_reading_a_value_that_no_longer_fits_its_column_type(self, book):
+        create_sheet(book, "D")
+        Table(
+            data=[[1], [2]],
+            row_labels=["r1", "r2"],
+            column_headers=["a"],
+            name="T",
+            column_types={"a": ColumnType.NUMBER},
+        ).create(book, sheet="D")
+        edit(book, lambda ws: ws.__setitem__("B3", "not a number"))  # column a, row r1
+        t = Table.read(book, "T")
+        assert t.read_cell(row="r1", column="a") == "not a number"
+        assert t.column_types == {"a": ColumnType.NUMBER}
+        with pytest.raises(ColumnTypeError):
+            t.write(book)  # the restriction bites again the moment it's written back

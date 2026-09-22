@@ -25,7 +25,7 @@ from typing import Any, NamedTuple
 
 from openpyxl.utils import coordinate_to_tuple
 
-from pyhandlexl import _frames
+from pyhandlexl import _display, _frames
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._merge import MergeReport, Snapshot, merge, same_state
 from pyhandlexl._safety import atomic_save, safe_load
@@ -256,6 +256,7 @@ class Table:
                 raise ValueError(
                     f"data row {i} has {len(row)} values but there are {width} column headers"
                 )
+        self._check_column_types()
 
     # ------------------------------------------------------------------ read
 
@@ -318,7 +319,13 @@ class Table:
 
     @classmethod
     def _from_snapshot(cls, snapshot: Snapshot, entry: mt.TableEntry, name: str) -> Table:
-        """The Table for a table just read from disk, remembering what it saw there."""
+        """The Table for a table just read from disk, remembering what it saw there.
+
+        Column types come straight from the schema, not through the constructor's own
+        check of them against the data: the file may have been edited by hand since a
+        restriction was declared, and a read has to succeed regardless — the check that
+        matters runs on the next write().
+        """
         table = cls(
             snapshot.data,
             snapshot.row_labels,
@@ -326,8 +333,8 @@ class Table:
             column_headers=snapshot.column_headers,
             name=name,
             style=entry.style,
-            column_types=dict(zip(snapshot.column_headers, entry.column_types, strict=True)),
         )
+        table._column_types = list(entry.column_types)
         table._sheet = entry.sheet
         table._created_at = entry.created_at
         table._modified_at = entry.modified_at
@@ -424,14 +431,17 @@ class Table:
     def set_column_type(self, header: str, column_type: ColumnType) -> None:
         """Restrict *header*'s column to *column_type*.
 
-        ``ColumnType.ANY`` removes any existing restriction. Checked (along
-        with every other column's) on the next :meth:`create`/:meth:`write`
-        — ``ColumnTypeError`` if a data value already in the column doesn't
-        match; existing data isn't checked until then.
+        ``ColumnType.ANY`` removes any existing restriction. Checked against the column's
+        existing data right away — ``ColumnTypeError`` if a value already there doesn't
+        match, and the restriction isn't applied. A restriction that arrives from another
+        writer, through a merge, is still only checked on the next :meth:`write`.
         """
         if not isinstance(column_type, ColumnType):
             raise TypeError(f"column_type must be a ColumnType, got {type(column_type).__name__}")
-        self._column_types[self._column_index(header)] = column_type
+        j = self._column_index(header)
+        for i, row in enumerate(self._data):
+            self._check_type(column_type, j, row[j], self._row_labels[i])
+        self._column_types[j] = column_type
 
     @property
     def last_merge(self) -> MergeReport | None:
@@ -738,13 +748,18 @@ class Table:
         ``ValueError``; use :meth:`rename_column`, :meth:`rename_row`, or
         :meth:`set_corner` for those. By label there's no other kind of cell
         to reach, so it always sets data.
+
+        Raises ``ColumnTypeError`` at once if *value* breaks the target column's
+        restriction (see :meth:`set_column_type`) — nothing changes in that case.
         """
         value = normalize_cell_value(value)
         target = self._dispatch(ref, row, column)
         if isinstance(target, _Position):
             self._set_by_position(target.row, target.column, value)
         else:
-            self._data[self._row_index(target.row)][self._column_index(target.column)] = value
+            i, j = self._row_index(target.row), self._column_index(target.column)
+            self._check_value_against_type(j, value, self._row_labels[i])
+            self._data[i][j] = value
 
     def _set_by_position(self, row: int, col_num: int, value: object) -> None:
         kind, i, j = self._classify(row, col_num)
@@ -754,23 +769,36 @@ class Table:
             raise ValueError("that cell is a column header — rename it with rename_column()")
         if kind == "label":
             raise ValueError("that cell is a row label — rename it with rename_row()")
+        self._check_value_against_type(j, value, self._row_labels[i])
         self._data[i][j] = value
 
     def set_row(self, label: str, values: Iterable[object]) -> None:
-        """Replace the data row for *label*; ``len(values)`` must match the column count."""
+        """Replace the data row for *label*; ``len(values)`` must match the column count.
+
+        Raises ``ColumnTypeError`` at once if a value breaks its column's restriction —
+        checked before anything is replaced, so a rejected row leaves the table untouched.
+        """
         new_row = _values(values)
         i = self._row_index(label)
         expected = self._width()
         if len(new_row) != expected:
             raise ValueError(f"expected {expected} values, got {len(new_row)}")
+        for j, value in enumerate(new_row):
+            self._check_value_against_type(j, value, label)
         self._data[i] = new_row
 
     def set_column(self, header: str, values: Iterable[object]) -> None:
-        """Replace the data column for *header*; ``len(values)`` must match the row count."""
+        """Replace the data column for *header*; ``len(values)`` must match the row count.
+
+        Raises ``ColumnTypeError`` at once if a value breaks the column's own restriction —
+        checked before anything is replaced, so a rejected column leaves the table untouched.
+        """
         new_col = _values(values)
         j = self._column_index(header)
         if len(new_col) != len(self._data):
             raise ValueError(f"expected {len(self._data)} values, got {len(new_col)}")
+        for i, value in enumerate(new_col):
+            self._check_value_against_type(j, value, self._row_labels[i])
         for data_row, value in zip(self._data, new_col, strict=True):
             data_row[j] = value
 
@@ -799,7 +827,8 @@ class Table:
         ``len(data.rows) + 1`` — that top end inserts it as the last row, the
         same result as :meth:`add_row`. Same constraints as :meth:`add_row`:
         *label* must not already be in use, and ``values`` must match the
-        column count.
+        column count. Raises ``ColumnTypeError`` at once if a value breaks its
+        column's restriction — nothing is inserted in that case.
         """
         if not isinstance(position, int):
             raise TypeError(f"position must be int, got {type(position).__name__}: {position!r}")
@@ -808,6 +837,8 @@ class Table:
         n = len(self._data)
         if not 1 <= position <= n + 1:
             raise IndexError(f"position {position} is out of range for {n} rows (1..{n + 1})")
+        for j, value in enumerate(new_row):
+            self._check_value_against_type(j, value, label)
         self._data.insert(position - 1, new_row)
         self._row_labels.insert(position - 1, label)
         self._row_origin[label] = None
@@ -902,13 +933,14 @@ class Table:
 
     # --------------------------------------------------------------- display
 
-    def show(self, *, rows: int | None = None, head: int | None = 5, tail: int | None = 5) -> None:
-        """Print the table to the console as a plain aligned grid.
+    def show(self, *, rows: int | None = None, head: int | None = 5, tail: int | None = 5) -> str:
+        """Print the table to the console as a bordered, column-aligned grid — and return
+        that same text.
 
-        By default, prints the first 5 and last 5 rows with a ``...`` divider
+        By default, shows the first 5 and last 5 rows with a ``...`` divider
         between them (nothing is hidden if the table has 10 rows or fewer).
-        ``rows=n`` overrides that and prints only the first *n* data rows.
-        To print every row, pass ``head=None, tail=None`` explicitly. This is
+        ``rows=n`` overrides that and shows only the first *n* data rows.
+        To show every row, pass ``head=None, tail=None`` explicitly. This is
         a console convenience only — it has nothing to do with cell formatting
         in the workbook.
         """
@@ -936,16 +968,16 @@ class Table:
                 labels = labels[:h] + labels[len(labels) - t :] if labels else labels
                 divider_after = h
 
-        grid: list[list[str]] = [[self._corner, *self._column_headers]]
+        grid: list[list[object]] = [[self._corner, *self._column_headers]]
         for i, row in enumerate(data):
             label = labels[i] if i < len(labels) else ""
-            grid.append([label, *("" if v is None else str(v) for v in row)])
+            grid.append([label, *row])
             if divider_after is not None and i == divider_after - 1 and divider_after < len(data):
                 grid.append(["..." for _ in grid[-1]])
 
-        widths = [max(len(row[c]) for row in grid) for c in range(len(grid[0]))]
-        for line in grid:
-            print("  ".join(cell.ljust(w) for cell, w in zip(line, widths, strict=True)))
+        text = _display.render_box(grid, header_rows=1)
+        print(text)
+        return text
 
     # ----------------------------------------------------------------- write
 
@@ -974,18 +1006,38 @@ class Table:
             for value in row:
                 check_cell_value(value)
 
+    def _check_type(self, column_type: ColumnType, j: int, value: object, label: str) -> None:
+        """``ColumnTypeError`` if *value* doesn't fit *column_type* — *j* is the column's
+        index (its header is used in the message), *label* the row it's in (also for
+        the message; a row not yet inserted, such as one from :meth:`add_row`, gives its
+        soon-to-be label)."""
+        if column_type is ColumnType.ANY or column_type.allows(value):
+            return
+        raise ColumnTypeError(
+            f"column {self._column_headers[j]!r} is restricted to {column_type.value} — row "
+            f"{label!r} has {type(value).__name__} {value!r}"
+        )
+
+    def _check_value_against_type(self, j: int, value: object, label: str) -> None:
+        """``ColumnTypeError`` if *value* doesn't fit column *j*'s current restriction."""
+        self._check_type(self._column_types[j], j, value, label)
+
     def _check_column_types(self) -> None:
+        """``ColumnTypeError`` for the first value anywhere that doesn't fit its column's
+        current restriction.
+
+        The safety net, not the front line: every direct edit already checks the value it's
+        given as it happens (see :meth:`_check_value_against_type`), so the only way a
+        violation can still be sitting in ``self._data`` by the time this runs is one that
+        arrived without going through an edit at all — a restriction that a merge in
+        :meth:`write` brought in from another writer, or one that was already there when
+        this table was :meth:`read` (a file edited by hand since the restriction was set;
+        see :meth:`_from_snapshot`)."""
         for j, column_type in enumerate(self._column_types):
             if column_type is ColumnType.ANY:
                 continue
-            header = self._column_headers[j]
             for i, row in enumerate(self._data):
-                value = row[j]
-                if not column_type.allows(value):
-                    raise ColumnTypeError(
-                        f"column {header!r} is restricted to {column_type.value} — row "
-                        f"{self._row_labels[i]!r} has {type(value).__name__} {value!r}"
-                    )
+                self._check_type(column_type, j, row[j], self._row_labels[i])
 
     def write(self, path: str | Path) -> None:
         """Write this table back to its tracked position.
@@ -996,9 +1048,10 @@ class Table:
         sheet to make room; growing rows never shifts anything.
 
         Every data value must be a type Excel can store (``CellTypeError``
-        otherwise), and must match any column type restriction
-        (``ColumnTypeError`` otherwise) — both checks happen here, not when
-        values are set.
+        otherwise) — checked here, not when values are set. A value that breaks a
+        column's type restriction is normally rejected the moment you set it (see
+        :meth:`set_column_type`); the one restriction checked here instead is one
+        that arrived through a merge from another writer.
 
         **Concurrent writers.** If another writer changed this table on disk
         since this object last read or wrote it, their changes are *merged*

@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from pyhandlexl import _frames
+from pyhandlexl import _display, _frames
 
 Grid = list[list[object]]
 
@@ -241,12 +241,13 @@ def show(
     rows: int | None = None,
     head: int | None = 5,
     tail: int | None = 5,
-) -> None:
-    """Print a grid to the console as a plain aligned block.
+) -> str:
+    """Print a grid to the console as a bordered, column-aligned block — and return that
+    same text.
 
     Same truncation rules as ``Table.show``: by default the first 5 and last
     5 rows with a ``...`` divider between them (nothing hidden at 10 rows or
-    fewer). ``rows=n`` overrides that and prints only the first *n* rows; pass
+    fewer). ``rows=n`` overrides that and shows only the first *n* rows; pass
     ``head=None, tail=None`` for every row. A console convenience only — it
     doesn't touch the grid. Ragged rows are padded with ``""`` for display.
     """
@@ -260,8 +261,9 @@ def show(
 
     data = _copy(grid)
     if not data:
-        print("(empty grid)")
-        return
+        text = "(empty grid)"
+        print(text)
+        return text
 
     divider_after: int | None = None
     if rows is not None:
@@ -273,16 +275,15 @@ def show(
             divider_after = h
 
     if not data:
-        return
+        return ""
 
     width = _width(data)
-    display_rows: list[list[str]] = []
+    display_rows: list[list[object]] = []
     for i, row in enumerate(data):
-        padded = row + [None] * (width - len(row))
-        display_rows.append(["" if v is None else str(v) for v in padded])
+        display_rows.append(row + [None] * (width - len(row)))
         if divider_after is not None and i == divider_after - 1 and divider_after < len(data):
             display_rows.append(["..."] * width)
 
-    col_widths = [max(len(r[c]) for r in display_rows) for c in range(width)]
-    for line in display_rows:
-        print("  ".join(cell.ljust(w) for cell, w in zip(line, col_widths, strict=True)))
+    text = _display.render_box(display_rows)
+    print(text)
+    return text
