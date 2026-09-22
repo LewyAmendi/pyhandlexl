@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-09-22
+
+The first stable release. [Semantic versioning](https://semver.org/) now formally applies —
+see the README's "Stability and versioning": the public API won't change incompatibly within
+the 1.x series. Hands-on testing since 0.9.8 turned up nothing beyond one cosmetic fix.
+
 ### Changed
 - **Column-type restrictions are checked immediately, not on the next `write()`/`create()`.**
   `set_column_type` now checks the column's existing data right away and raises
@@ -18,10 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `write()` is one that arrived from another writer through a merge — that safety net is
   unchanged.
 - **`Table.show()` and `grid.show()` return the text they print,** bordered and
-  column-aligned (`+`/`-`/`|`) instead of the previous whitespace-separated columns, with a
+  column-aligned (`-`/`+`/`|`) instead of the previous whitespace-separated columns, with a
   rule under the table's header row. A value's own newline or carriage return is now shown
   as `\n` rather than left as a real line break, which would otherwise split a bordered row
   and break the layout.
+
+### Fixed
+- **The bordered `show()` output no longer ends each rule line in a stray `+`.** The
+  outermost character of every rule line is now `-`, matching the dashes it borders; `+`
+  still marks the internal column boundaries.
 
 ## [0.9.8] — 2026-09-20
 
@@ -802,7 +813,8 @@ see the README's "Stability and versioning".
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.8...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.8...v1.0.0
 [0.9.8]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.6...v0.9.8
 [0.9.6]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.4...v0.9.5
