@@ -14,7 +14,7 @@ class TestBorders:
     def test_top_and_bottom_rule_match(self):
         lines = render_box([["a", "b"], ["c", "d"]]).splitlines()
         assert lines[0] == lines[-1]
-        assert lines[0].startswith("+") and lines[0].endswith("+")
+        assert lines[0].startswith("-") and lines[0].endswith("-")
 
     def test_content_lines_are_piped(self):
         lines = render_box([["a"]]).splitlines()
@@ -22,19 +22,19 @@ class TestBorders:
 
     def test_a_header_separator_appears_after_header_rows(self):
         lines = render_box([["h"], ["1"], ["2"]], header_rows=1).splitlines()
-        rules = [line for line in lines if line.startswith("+")]
+        rules = [line for line in lines if line.startswith("-")]
         assert len(rules) == 3  # top, after the header, bottom
         assert lines[0] == lines[2] == lines[5]  # every rule is identical
 
     def test_no_doubled_rule_when_the_header_is_the_only_row(self):
         lines = render_box([["h"]], header_rows=1).splitlines()
         assert len(lines) == 3  # top rule, header, bottom rule — not two rules in a row
-        rules = [line for line in lines if line.startswith("+")]
+        rules = [line for line in lines if line.startswith("-")]
         assert len(rules) == 2
 
     def test_no_separator_without_header_rows(self):
         lines = render_box([["a"], ["b"]]).splitlines()
-        rules = [line for line in lines if line.startswith("+")]
+        rules = [line for line in lines if line.startswith("-")]
         assert len(rules) == 2
 
 

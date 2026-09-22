@@ -53,7 +53,7 @@ from pyhandlexl.validate import (
     is_valid_xlsx,
 )
 
-__version__ = "0.9.8"
+__version__ = "1.0.0"
 
 __all__ = [
     "CellTypeError",

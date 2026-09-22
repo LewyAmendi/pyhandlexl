@@ -269,7 +269,7 @@ class TestNamedTableAndGridLayoutCoexist:
 
 
 def _content_lines(text: str) -> list[str]:
-    """The bordered block's cell rows (header + data) — the rule lines start with '+'."""
+    """The bordered block's cell rows (header + data) — the rule lines start with '-'."""
     return [line for line in text.splitlines() if line.startswith("|")]
 
 
@@ -284,7 +284,7 @@ class TestShow:
     def test_bordered_with_a_rule_under_the_header(self):
         t = Table(data=[[1], [2]], column_headers=["v"], row_labels=["a", "b"], name="T")
         lines = t.show().splitlines()
-        rules = [line for line in lines if line.startswith("+")]
+        rules = [line for line in lines if line.startswith("-")]
         assert len(rules) == 3  # top, under the header, bottom
         assert rules[0] == rules[1] == rules[2]
         assert len(_content_lines(t.show())) == 3  # header + 2 data rows

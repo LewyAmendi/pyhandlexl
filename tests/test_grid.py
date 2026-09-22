@@ -148,7 +148,7 @@ class TestShape:
 
 
 def _content_lines(text: str) -> list[str]:
-    """The bordered block's cell rows — the rule lines start with '+'."""
+    """The bordered block's cell rows — the rule lines start with '-'."""
     return [line for line in text.splitlines() if line.startswith("|")]
 
 
@@ -160,7 +160,7 @@ class TestShow:
     def test_bordered_top_and_bottom(self, g):
         lines = grid.show(g).splitlines()
         assert lines[0] == lines[-1]  # the same rule, top and bottom
-        assert lines[0].startswith("+") and lines[0].endswith("+")
+        assert lines[0].startswith("-") and lines[0].endswith("-")
         assert len(_content_lines(grid.show(g))) == 3  # no header row for a plain grid
 
     def test_show_all(self, g):

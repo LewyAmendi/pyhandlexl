@@ -41,11 +41,11 @@ Have a `.csv` file instead of `.xlsx`? `read_sheet`/`write_sheet`/
 data *between* CSV and `.xlsx` instead, see
 [Moving data between CSV and .xlsx](#moving-data-between-csv-and-xlsx).
 
-> **Beta, on the way to 1.0.** The API is frozen (see
-> [Stability and versioning](#stability-and-versioning)); only bug fixes are planned
-> before 1.0.0, and every change is recorded in the
+> **Stable.** pyhandlexl is at 1.0 — the public API won't change incompatibly
+> within the 1.x series (see
+> [Stability and versioning](#stability-and-versioning)), and every change is
+> recorded in the
 > [changelog](https://github.com/LewyAmendi/pyhandlexl/blob/main/CHANGELOG.md).
-> Pin a version (`pyhandlexl~=0.9.8`) if you need it not to move.
 
 ## Install
 
@@ -721,12 +721,12 @@ t.show(head=None, tail=None)  # every row, no truncation
 ```
 
 ```
-+-------+----+----+
+--------+----+-----
 | name  | q1 | q2 |
-+-------+----+----+
+--------+----+-----
 | Alice | 10 | 20 |
 | Bob   | 30 | 40 |
-+-------+----+----+
+--------+----+-----
 ```
 
 The default (`head=5, tail=5`) shows everything with no divider if the table
