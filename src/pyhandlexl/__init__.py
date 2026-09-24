@@ -11,6 +11,7 @@ from pyhandlexl.core import (
     create_csv,
     create_sheet,
     create_workbook,
+    delete_schema_sheet,
     delete_sheet,
     delete_table,
     delete_workbook,
@@ -20,6 +21,7 @@ from pyhandlexl.core import (
     list_tables,
     read_sheet,
     rename_sheet,
+    rename_workbook,
     sheet_exists,
     sheet_kind,
     table_info,
@@ -53,7 +55,7 @@ from pyhandlexl.validate import (
     is_valid_xlsx,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "CellTypeError",
@@ -89,6 +91,7 @@ __all__ = [
     "create_csv",
     "create_sheet",
     "create_workbook",
+    "delete_schema_sheet",
     "delete_sheet",
     "delete_table",
     "delete_workbook",
@@ -100,6 +103,7 @@ __all__ = [
     "list_tables",
     "read_sheet",
     "rename_sheet",
+    "rename_workbook",
     "sheet_exists",
     "sheet_kind",
     "table_info",
