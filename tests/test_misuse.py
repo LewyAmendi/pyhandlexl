@@ -161,7 +161,9 @@ def check_every_parameter(func, fresh, make_call):
 
 
 FUNCTIONS = [
-    name for name in p.__all__ if inspect.isfunction(getattr(p, name)) and name != "delete_workbook"
+    name
+    for name in p.__all__
+    if inspect.isfunction(getattr(p, name)) and name not in {"delete_workbook", "rename_workbook"}
 ]
 GRID_FUNCTIONS = [
     name

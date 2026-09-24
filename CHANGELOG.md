@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-09-24
+
+Two new functions and a tidier `show()`; nothing existing changes incompatibly.
+
+### Added
+- **`delete_schema_sheet(path)`** — the explicit way to delete the reserved schema sheet,
+  which `delete_sheet` still refuses. Table data stays in place; the schema's styles, column
+  types and dates are lost, and the next call that reads the schema rebuilds it with a
+  `SchemaRebuiltWarning`. A workbook without a schema sheet is left untouched.
+- **`rename_workbook(path, new_name)`** — renames a workbook file in its own folder. It never
+  overwrites (`FileExistsError`), must keep the extension, retries a locked file, and takes a
+  bare file name, not a path.
+
+### Changed
+- **`Table.show()` and `grid.show()` borders have no `+` at all:** the rule lines are solid
+  dashes, and `|` still separates the columns in the rows.
+
 ## [1.0.0] — 2026-09-22
 
 The first stable release. [Semantic versioning](https://semver.org/) now formally applies —
@@ -813,7 +830,8 @@ see the README's "Stability and versioning".
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.8...v1.0.0
 [0.9.8]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.6...v0.9.8
 [0.9.6]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.5...v0.9.6

@@ -16,6 +16,11 @@ class TestBorders:
         assert lines[0] == lines[-1]
         assert lines[0].startswith("-") and lines[0].endswith("-")
 
+    def test_there_is_no_plus_sign_anywhere(self):
+        text = render_box([["a", "bb"], ["c", "d"]], header_rows=1)
+        assert "+" not in text
+        assert all(set(line) == {"-"} for line in text.splitlines() if line.startswith("-"))
+
     def test_content_lines_are_piped(self):
         lines = render_box([["a"]]).splitlines()
         assert lines[1].startswith("|") and lines[1].endswith("|")

@@ -5,12 +5,13 @@ from __future__ import annotations
 import pytest
 from openpyxl import load_workbook
 
-from pyhandlexl import grid
+from pyhandlexl import Table, grid
 from pyhandlexl.core import (
     append_rows,
     create_csv,
     create_sheet,
     create_workbook,
+    delete_schema_sheet,
     delete_sheet,
     delete_workbook,
     export_xl_to_csv,
@@ -18,10 +19,16 @@ from pyhandlexl.core import (
     list_sheets,
     read_sheet,
     rename_sheet,
+    rename_workbook,
     sheet_exists,
     write_sheet,
 )
-from pyhandlexl.errors import DimensionError, SheetNameError, SheetNotFoundError
+from pyhandlexl.errors import (
+    DimensionError,
+    FileLockedError,
+    SheetNameError,
+    SheetNotFoundError,
+)
 
 
 class TestCreateWorkbook:
@@ -43,6 +50,108 @@ class TestCreateWorkbook:
     def test_invalid_sheet_name_raises(self, tmp_path):
         with pytest.raises(SheetNameError):
             create_workbook(tmp_path / "new.xlsx", sheet="bad/name")
+
+
+class TestRenameWorkbook:
+    def test_renames_in_the_same_folder(self, book):
+        write_sheet(book, [["x"]])
+        rename_workbook(book, "renamed.xlsx")
+        assert not book.exists()
+        assert read_sheet(book.with_name("renamed.xlsx")) == [["x"]]
+
+    def test_same_name_is_a_no_op(self, book):
+        rename_workbook(book, book.name)
+        assert book.exists()
+
+    def test_only_the_capitalisation_can_change(self, book):
+        rename_workbook(book, "BOOK.xlsx")
+        assert [p.name for p in book.parent.iterdir()] == ["BOOK.xlsx"]
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            rename_workbook(tmp_path / "nope.xlsx", "x.xlsx")
+
+    def test_never_overwrites(self, book):
+        other = book.with_name("other.xlsx")
+        create_workbook(other)
+        write_sheet(other, [["keep"]])
+        with pytest.raises(FileExistsError):
+            rename_workbook(book, "other.xlsx")
+        assert book.exists() and read_sheet(other) == [["keep"]]
+
+    def test_non_workbook_path_raises(self, tmp_path):
+        txt = tmp_path / "notes.txt"
+        txt.write_text("keep me")
+        with pytest.raises(ValueError):
+            rename_workbook(txt, "notes2.txt")
+        assert txt.exists()
+
+    @pytest.mark.parametrize("bad", ["", "sub/x.xlsx", "sub\\x.xlsx", "../x.xlsx"])
+    def test_a_path_is_not_a_name(self, book, bad):
+        with pytest.raises(ValueError):
+            rename_workbook(book, bad)
+        assert book.exists()
+
+    @pytest.mark.parametrize("bad", ["x.xlsm", "x.csv", "x"])
+    def test_the_extension_must_be_kept(self, book, bad):
+        with pytest.raises(ValueError):
+            rename_workbook(book, bad)
+        assert book.exists()
+
+    def test_non_str_name_raises_typeerror(self, book):
+        with pytest.raises(TypeError):
+            rename_workbook(book, 5)
+
+    def test_a_locked_file_raises_after_retrying(self, book, monkeypatch):
+        def locked(*_args):
+            raise PermissionError("in use")
+
+        monkeypatch.setattr("os.replace", locked)
+        monkeypatch.setattr("pyhandlexl._safety.sleep", lambda _s: None)
+        with pytest.raises(FileLockedError):
+            rename_workbook(book, "x.xlsx")
+        assert book.exists()
+
+
+class TestDeleteSchemaSheet:
+    @pytest.fixture
+    def with_table(self, book):
+        create_sheet(book, "Data")
+        Table(data=[[1]], column_headers=["a"], row_labels=["r"], name="T").create(
+            book, sheet="Data"
+        )
+        return book
+
+    def test_removes_the_sheet_and_keeps_the_table_data(self, with_table):
+        assert "_pyhandlexl_tables" in load_workbook(with_table).sheetnames
+        delete_schema_sheet(with_table)
+        wb = load_workbook(with_table)
+        assert "_pyhandlexl_tables" not in wb.sheetnames
+        values = [c.value for row in wb["Data"].iter_rows() for c in row]
+        assert "TABLE NAME" in values and 1 in values  # the table's cells are untouched
+
+    def test_the_next_read_rebuilds_it_with_a_warning(self, with_table):
+        delete_schema_sheet(with_table)
+        with pytest.warns(UserWarning, match="rebuilt"):
+            t = Table.read(with_table, "T")
+        assert t.read_cell(row="r", column="a") == 1
+
+    def test_a_workbook_without_one_is_left_alone(self, book):
+        before = book.read_bytes()
+        delete_schema_sheet(book)
+        assert book.read_bytes() == before
+
+    def test_deleting_twice_is_fine(self, with_table):
+        delete_schema_sheet(with_table)
+        delete_schema_sheet(with_table)
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            delete_schema_sheet(tmp_path / "nope.xlsx")
+
+    def test_delete_sheet_still_refuses_it(self, with_table):
+        with pytest.raises(ValueError):
+            delete_sheet(with_table, "_pyhandlexl_tables")
 
 
 class TestDeleteWorkbook:

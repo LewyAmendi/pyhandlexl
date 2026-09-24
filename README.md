@@ -602,6 +602,12 @@ write to. Leave it alone: it's marked with a red sheet tab and a warning
 comment on its first cell, every time it's written, so it's hard to miss
 even for someone opening the workbook by hand without having read this.
 
+**Deleting the reserved sheet on purpose.** `delete_sheet` refuses it; the explicit way is
+`delete_schema_sheet(path)`. Every table's cells stay as they are, but what only the schema
+recorded is lost — styles, column types, creation and modification dates — and the next call
+that reads the schema rebuilds it (below). It does nothing on a workbook that has no schema
+sheet.
+
 **If that reserved sheet is deleted entirely**, self-heal can't help — it
 only relocates a table it already has a schema entry for. Instead, every
 operation that reads the schema (`Table.read`, `Table.write`, `Table.create`,
@@ -721,12 +727,12 @@ t.show(head=None, tail=None)  # every row, no truncation
 ```
 
 ```
---------+----+-----
+-------------------
 | name  | q1 | q2 |
---------+----+-----
+-------------------
 | Alice | 10 | 20 |
 | Bob   | 30 | 40 |
---------+----+-----
+-------------------
 ```
 
 The default (`head=5, tail=5`) shows everything with no divider if the table
@@ -1040,12 +1046,17 @@ typo in a path can't silently produce a stray workbook.
 ```python
 create_workbook(path, *, sheet="Sheet")   # FileExistsError if the path is taken
 delete_workbook(path)                      # FileNotFoundError if it isn't there
+rename_workbook(path, "new_name.xlsx")     # same folder, same extension, never overwrites
 create_csv(path)                           # the .csv equivalent of create_workbook
 ```
 
 `create_workbook` makes a new empty `.xlsx` with one worksheet. `delete_workbook`
 removes a workbook file, retrying while it is locked (open in Excel) before
 raising `FileLockedError`, and refuses a path that isn't an Excel extension.
+`rename_workbook` renames one in place: the new name is a bare file name, not a path
+(it renames, it doesn't move), it must keep the extension, and it raises
+`FileExistsError` rather than overwrite something already called that. It retries a
+locked file the same way.
 `create_csv` makes a new empty `.csv` file — same guarantee, same
 `FileExistsError` if something's already there, so a typo can't silently
 overwrite or produce a stray file either way.

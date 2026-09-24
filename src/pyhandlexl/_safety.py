@@ -274,6 +274,28 @@ def safe_delete(
     _retry(path.unlink, path=path, retries=retries, delay=delay)
 
 
+def safe_rename(
+    path: str | Path,
+    target: str | Path,
+    *,
+    retries: int = DEFAULT_RETRIES,
+    delay: float = DEFAULT_DELAY,
+) -> None:
+    """Rename a file to *target*, retrying while it is locked; never overwrites.
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        FileExistsError: something else is already at *target*.
+        FileLockedError: the file stayed locked through every retry.
+    """
+    path, target = Path(path), Path(target)
+    if not path.exists():
+        raise FileNotFoundError(f"no file at {path}")
+    if target.exists() and not os.path.samefile(path, target):
+        raise FileExistsError(f"{target} already exists")
+    _retry(lambda: os.replace(path, target), path=path, retries=retries, delay=delay)
+
+
 def atomic_save(
     workbook: Workbook,
     path: str | Path,

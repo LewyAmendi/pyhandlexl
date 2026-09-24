@@ -28,6 +28,7 @@ from pyhandlexl._safety import (
     resolve_target,
     safe_delete,
     safe_load,
+    safe_rename,
 )
 from pyhandlexl.errors import (
     InvalidFileError,
@@ -259,6 +260,36 @@ def delete_workbook(path: str | Path) -> None:
     if path.suffix.lower() not in _WORKBOOK_SUFFIXES:
         raise ValueError(f"not a workbook path (need one of {sorted(_WORKBOOK_SUFFIXES)}): {path}")
     safe_delete(path)
+
+
+def rename_workbook(path: str | Path, new_name: str) -> None:
+    """Rename a workbook file, keeping it in the same folder and never overwriting.
+
+    *new_name* is a bare file name, ``"budget_2027.xlsx"``, not a path — this renames, it
+    does not move. It must keep the workbook's extension: an ``.xlsx`` renamed ``.xlsm``
+    would hold content Excel refuses to open under that name. A locked file (open in Excel)
+    is retried before giving up. Renaming a workbook to its own name does nothing.
+
+    Raises:
+        ValueError: *path* does not name an Excel workbook (.xlsx/.xlsm/.xltx/.xltm), or
+            *new_name* is empty, holds a folder, or has a different extension.
+        FileNotFoundError: no file at *path*.
+        FileExistsError: something is already called *new_name* in that folder.
+        FileLockedError: the file stayed locked (open in Excel) through every retry.
+    """
+    path = Path(path)
+    if path.suffix.lower() not in _WORKBOOK_SUFFIXES:
+        raise ValueError(f"not a workbook path (need one of {sorted(_WORKBOOK_SUFFIXES)}): {path}")
+    if not isinstance(new_name, str):
+        raise TypeError(f"new_name must be a str, not {type(new_name).__name__}")
+    if not new_name or Path(new_name).name != new_name or "/" in new_name or "\\" in new_name:
+        raise ValueError(f"new_name must be a plain file name, not a path: {new_name!r}")
+    if Path(new_name).suffix.lower() != path.suffix.lower():
+        raise ValueError(
+            f"new_name must keep the extension {path.suffix!r} (a workbook renamed to a "
+            f"different type would not open): {new_name!r}"
+        )
+    safe_rename(path, path.with_name(new_name))
 
 
 def read_sheet(
@@ -860,6 +891,32 @@ def delete_table(path: str | Path, name: str) -> None:
         mt.clear_region(ws, entry.anchor_row, entry.anchor_col, entry.height, entry.width)
         del entries[name]
         mt.save_schema(workbook, entries)
+        atomic_save(workbook, path)
+    finally:
+        workbook.close()
+
+
+def delete_schema_sheet(path: str | Path) -> None:
+    """Delete the reserved schema sheet, if the workbook has one.
+
+    This is the one explicit way to remove it; :func:`delete_sheet` refuses. Every table's
+    data stays exactly where it is, but what only the schema recorded is lost: each table's
+    style, its column types, and its creation and modification dates. The next call that
+    reads the schema rebuilds it by scanning for tables and emits ``SchemaRebuiltWarning``
+    (see the README's "Multiple named tables on one sheet"). A workbook without a schema
+    sheet is left untouched.
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        ValueError: the schema sheet is the only sheet in the file.
+    """
+    workbook = safe_load(path)
+    try:
+        if mt.SCHEMA_SHEET not in workbook.sheetnames:
+            return
+        if len(workbook.sheetnames) == 1:
+            raise ValueError("cannot delete the only sheet in the workbook")
+        del workbook[mt.SCHEMA_SHEET]
         atomic_save(workbook, path)
     finally:
         workbook.close()

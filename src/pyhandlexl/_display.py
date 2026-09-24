@@ -31,7 +31,7 @@ def render_box(rows: list[list[object]], *, header_rows: int = 0) -> str:
     width = len(rows[0])
     text_rows = [[_text(value) for value in row] for row in rows]
     col_widths = [max(len(row[c]) for row in text_rows) for c in range(width)]
-    rule = "-" + "+".join("-" * (w + 2) for w in col_widths) + "-"
+    rule = "-" * (sum(col_widths) + 3 * width + 1)
 
     last = len(text_rows) - 1
     lines = [rule]
