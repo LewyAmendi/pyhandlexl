@@ -28,6 +28,11 @@ class TableStyle:
     respectively. Every other field is always meaningful (fonts always have
     a name/size/color, ``header_bold`` is always True or False).
 
+    ``fit_text`` is off by default. Turn it on and each write sizes the table's columns to
+    their content (no wider than ``max_width`` characters) and wraps the text that is longer,
+    so long text is readable without touching the layout by hand. A column whose width you
+    set yourself (``Table.set_column_width``, or by hand in Excel) is left alone.
+
     See ``TableStyle.DEFAULT``, ``.MINIMAL``, and ``.NONE`` for ready-made
     choices — construct your own ``TableStyle(...)`` for anything else.
     """
@@ -48,8 +53,18 @@ class TableStyle:
     data_font_color: str = "000000"
     band_fill: str = "F2F2F2"
     border_color: str = "000000"
+    fit_text: bool = False
+    max_width: int = 60
 
     def __post_init__(self) -> None:
+        if not isinstance(self.fit_text, bool):
+            raise TypeError(f"fit_text must be bool, got {type(self.fit_text).__name__}")
+        if (
+            isinstance(self.max_width, bool)
+            or not isinstance(self.max_width, int)
+            or not 1 <= self.max_width <= 255
+        ):
+            raise ValueError(f"max_width must be an int from 1 to 255, got {self.max_width!r}")
         for name in ("header_font_name", "data_font_name"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value:

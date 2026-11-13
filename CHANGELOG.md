@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-11-13
+
+Cell-level formatting, column widths and row heights, and optional text fitting, for tables and
+for grids. This is a major version because of the size of the addition, not because anything
+broke: **nothing that worked in 1.x changes**, the layout of a file is exactly what it was unless
+you opt in to the new features, and a workbook written by this version still opens in 1.x (an
+older version's schema reader ignores the new columns, and the stored style is unchanged).
+
+### Added
+- **`CellFormat`** — bold, italic, text colour, fill, number format, alignment and text
+  wrapping for one cell; every field optional (`None` leaves that part alone), so a format sits on top of the
+  table's own look.
+- **`Table.set_format(format, *, row=None, column=None)`**, **`Table.get_format(row, column)`**
+  and **`Table.clear_format(*, row=None, column=None)`** — format one cell, a whole row or a
+  whole column of a table. A format is keyed by the row label and column header, so it stays
+  with its cell when rows and columns are inserted, dropped or renamed, and when a neighbouring
+  table grows and shifts this one. Stored in the schema sheet (in extra columns after the
+  tenth, so older schemas load unchanged), read back by `Table.read`, and merged on write like a
+  value: only-one-side changes are kept, and a clash goes to yours with a `MergeConflictWarning`.
+- **`Styled(value, format)`** — a grid value together with its `CellFormat`. `write_sheet` and
+  `append_rows` accept it; the `grid` helpers move it like any other value, so formatting
+  follows its data through inserts, deletes and transposes. `grid.show` and `grid.to_dataframe`
+  use the plain values; in a `.csv` it is written as just its value.
+- **`read_sheet(..., formats=True)`** — formatted cells come back as `Styled`. Off by default
+  (plain values, faster); a `ValueError` for a `.csv` file.
+
+- **Column widths and row heights for tables:** `Table.set_column_width(header, width)`,
+  `get_column_width`, `clear_column_width`, and `set_row_height(label, height)`,
+  `get_row_height`, `clear_row_height`. Keyed by header and label, so they follow renames,
+  drops and shifts; stored in the schema sheet; merged on write. A sheet row's height is shared
+  by every table beside it on that row (the table written last wins).
+- **Optional text fitting — off by default, so layout is unchanged unless you ask:**
+  `TableStyle(fit_text=True, max_width=60)` sizes each column to its longest line (up to
+  `max_width`) and wraps the text that is longer, on every write. It never overrides a width you
+  set, a width changed by hand in Excel, or an explicit `CellFormat(wrap=...)`. Stored with the
+  table in a form older versions ignore, so the stored style stays readable by them.
+- **Sizing grids:** `write_sheet` and `append_rows` take `column_widths=`, `row_heights=`,
+  `fit_text=` and `max_width=`, and the new `read_dimensions(path, sheet=None)` returns a
+  `Dimensions` of the widths and heights a worksheet sets. Not for `.csv` (`ValueError`).
+
+### Fixed
+- **Formatting inside a table is no longer lost when a neighbouring table grows.** Moving a
+  table right used to copy its values only and repaint it from its `TableStyle`, wiping any
+  hand formatting (a highlighted cell, a number format) despite the README's promise that it
+  survives. Each cell's style now moves with its value, and nothing is repainted.
+
 ## [1.1.0] — 2026-09-24
 
 Two new functions and a tidier `show()`; nothing existing changes incompatibly.
@@ -830,7 +876,8 @@ see the README's "Stability and versioning".
 - Exception hierarchy rooted at `PyhandlexlError`.
 - Continuous integration: lint and a test matrix on Python 3.10–3.13.
 
-[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/LewyAmendi/pyhandlexl/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.8...v1.0.0
 [0.9.8]: https://github.com/LewyAmendi/pyhandlexl/compare/v0.9.6...v0.9.8

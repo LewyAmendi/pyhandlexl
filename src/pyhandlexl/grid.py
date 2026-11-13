@@ -8,6 +8,10 @@ input is never modified — so calls compose:
 Rows and columns are addressed with 1-based, Excel-style numbers (row 1 is the
 first row), matching ``Table``. Ragged rows are handled: column operations pad
 short rows with ``None`` as needed.
+
+A cell may be a :class:`~pyhandlexl.format.Styled` — a value plus its cell format. Every
+helper here moves it like any other value, so inserting, deleting or transposing carries
+the formatting along with the data it belongs to.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from pyhandlexl import _display, _frames
+from pyhandlexl.format import unwrap
 
 Grid = list[list[object]]
 
@@ -33,6 +38,12 @@ def _values(values: Iterable[object]) -> list[object]:
 
 def _copy(grid: Iterable[Iterable[object]]) -> Grid:
     return [_values(row) for row in grid]
+
+
+def _plain(grid: Iterable[Iterable[object]]) -> Grid:
+    """A copy of *grid* with every :class:`~pyhandlexl.format.Styled` replaced by its value,
+    for the functions that only look at values (display, DataFrames)."""
+    return [[unwrap(value) for value in _values(row)] for row in grid]
 
 
 def _width(grid: Grid) -> int:
@@ -216,7 +227,7 @@ def to_dataframe(grid: Iterable[Iterable[object]], *, header: bool = True) -> An
     Raises:
         ImportError: pandas is not installed.
     """
-    return _frames.grid_to_dataframe(grid, header)
+    return _frames.grid_to_dataframe(_plain(grid), header)
 
 
 def from_dataframe(df: Any, *, header: bool = True, index: bool = False) -> Grid:
@@ -259,7 +270,7 @@ def show(
         if value < 0:
             raise ValueError(f"{param_name} must not be negative, got {value}")
 
-    data = _copy(grid)
+    data = _plain(grid)
     if not data:
         text = "(empty grid)"
         print(text)

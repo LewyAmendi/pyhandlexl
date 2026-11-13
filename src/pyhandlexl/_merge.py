@@ -22,11 +22,12 @@ conflict.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import cast
 
 from pyhandlexl.column_type import ColumnType
+from pyhandlexl.format import CellFormat
 from pyhandlexl.style import TableStyle
 from pyhandlexl.validate import normalize_newlines
 
@@ -44,6 +45,10 @@ class Snapshot:
     corner: str
     style: TableStyle
     column_types: list[ColumnType]  # aligned with column_headers
+    # cell formats, keyed by (row label, column header)
+    formats: dict[tuple[str, str], CellFormat] = field(default_factory=dict)
+    col_widths: dict[str, float] = field(default_factory=dict)  # by column header
+    row_heights: dict[str, float] = field(default_factory=dict)  # by row label
 
     def copy(self) -> Snapshot:
         return Snapshot(
@@ -53,6 +58,9 @@ class Snapshot:
             self.corner,
             self.style,
             list(self.column_types),
+            dict(self.formats),
+            dict(self.col_widths),
+            dict(self.row_heights),
         )
 
 
@@ -140,6 +148,9 @@ def same_state(a: Snapshot, b: Snapshot) -> bool:
         and a.corner == b.corner
         and a.style == b.style
         and a.column_types == b.column_types
+        and a.formats == b.formats
+        and a.col_widths == b.col_widths
+        and a.row_heights == b.row_heights
         and all(
             same_value(x, y)
             for row_a, row_b in zip(a.data, b.data, strict=True)
@@ -152,6 +163,32 @@ def _unique(snapshot: Snapshot) -> bool:
     return len(set(snapshot.row_labels)) == len(snapshot.row_labels) and len(
         set(snapshot.column_headers)
     ) == len(snapshot.column_headers)
+
+
+def _merge_sizes(
+    kind: str,
+    items: list[_Item],
+    base: dict[str, float],
+    ours: dict[str, float],
+    theirs: dict[str, float],
+    conflicts: list[str],
+) -> dict[str, float]:
+    """Merge a row-height or column-width map, like a cell: a size only one side changed is
+    kept, and where both changed it differently, ours wins."""
+    out: dict[str, float] = {}
+    for item in items:
+        o = ours.get(item.ours) if item.ours is not None else None
+        t = theirs.get(item.theirs) if item.theirs is not None else None
+        b = base.get(item.base) if item.base is not None else None
+        if o == b:  # we left it alone
+            chosen = t if item.theirs is not None else o
+        else:
+            chosen = o
+            if t not in (b, o):
+                conflicts.append(f"{kind} of {item.label!r}: yours overwrote another writer's")
+        if chosen is not None:
+            out[item.label] = chosen
+    return out
 
 
 def _show(value: object) -> str:
@@ -409,6 +446,45 @@ def merge(
             line.append(value)
         data.append(line)
 
+    # ---- cell formats: like a value, ours is kept only if we changed it since base
+    formats: dict[tuple[str, str], CellFormat] = {}
+    for r in rows:
+        for c in cols:
+            ours_fmt = (
+                ours.formats.get((r.ours, c.ours))
+                if r.ours is not None and c.ours is not None
+                else None
+            )
+            theirs_fmt = (
+                theirs.formats.get((r.theirs, c.theirs))
+                if r.theirs is not None and c.theirs is not None
+                else None
+            )
+            base_fmt = (
+                base.formats.get((r.base, c.base))
+                if r.base is not None and c.base is not None
+                else None
+            )
+            if ours_fmt == base_fmt:  # we left it alone
+                chosen_fmt = (
+                    theirs_fmt if (r.theirs is not None and c.theirs is not None) else ours_fmt
+                )
+            else:
+                chosen_fmt = ours_fmt
+                if theirs_fmt not in (base_fmt, ours_fmt):
+                    conflicts.append(
+                        f"format of ({r.label!r}, {c.label!r}): yours overwrote another writer's"
+                    )
+            if chosen_fmt is not None:
+                formats[(r.label, c.label)] = chosen_fmt
+
+    col_widths = _merge_sizes(
+        "width", cols, base.col_widths, ours.col_widths, theirs.col_widths, conflicts
+    )
+    row_heights = _merge_sizes(
+        "height", rows, base.row_heights, ours.row_heights, theirs.row_heights, conflicts
+    )
+
     # ---- corner, style, column types: ours only if we changed it since base
     corner = theirs.corner
     if ours.corner != base.corner:
@@ -453,6 +529,9 @@ def merge(
         corner,
         style,
         types,
+        formats,
+        col_widths,
+        row_heights,
     )
     report = MergeReport(
         rows_added=tuple(r.label for r in rows if r.ours is None),
