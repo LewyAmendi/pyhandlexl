@@ -41,8 +41,8 @@ Have a `.csv` file instead of `.xlsx`? `read_sheet`/`write_sheet`/
 data *between* CSV and `.xlsx` instead, see
 [Moving data between CSV and .xlsx](#moving-data-between-csv-and-xlsx).
 
-> **Stable.** pyhandlexl is at 1.0 — the public API won't change incompatibly
-> within the 1.x series (see
+> **Stable.** pyhandlexl has had a stable API since 1.0 — it won't change incompatibly
+> within a major version (see
 > [Stability and versioning](#stability-and-versioning)), and every change is
 > recorded in the
 > [changelog](https://github.com/LewyAmendi/pyhandlexl/blob/main/CHANGELOG.md).
@@ -337,7 +337,7 @@ row, column, and cell:
 | added the same label with the same values | one row, no conflict |
 | deleted a row/column the other left alone | it's gone |
 | renamed a row/column the other edited | your new name, their edit |
-| changed the corner, style, or a column type (only one side did) | that change is kept |
+| changed the corner, style, a column type, a [cell format](#formatting-cells), or a [width or height](#column-widths-row-heights-and-fitting-text) (only one side did) | that change is kept |
 | **changed the very same thing differently** | **yours wins**, with a warning |
 | deleted a row/column the other **edited** | your delete wins, with a warning |
 | edited a row/column the other **deleted** | your edit restores it, with a warning |
@@ -412,6 +412,7 @@ TableStyle(
     header_bold=True, header_fill="76933C",
     data_font_name="Calibri", data_font_size=11, data_font_color="000000",
     band_fill="F2F2F2", border_color="000000",
+    fit_text=False, max_width=60,   # optional text fitting: see "Column widths, row heights..."
 )
 ```
 
@@ -420,12 +421,133 @@ same as on disk, nothing is repainted — only the values are rewritten — and 
 or dropping rows or columns repaints just the old and the new last row and column
 (the only cells whose border changes; banding follows a row's position, not its
 data). So formatting you added by hand *inside* a table, such as a highlighted cell
-or a currency format, survives an ordinary write. Changing `t.style` repaints the whole
-table, and a number format follows the value's type: a date is always written as a date.
+or a currency format, survives an ordinary write — and survives the table being moved
+right by a growing neighbour, which carries every cell's look across with its value.
+Changing `t.style` repaints the whole table, and a number format follows the value's
+type: a date is always written as a date.
+
+To format particular cells from code instead of by hand, see
+[Formatting cells](#formatting-cells).
 
 Styling never touches `t.data` or equality — `t1 == t2` compares data,
 headers, labels, corner, and column types only, however differently the two
-are styled. It has no effect on `.csv` files — there's nothing there to style.
+are styled or formatted. It has no effect on `.csv` files — there's nothing there to style.
+
+### Formatting cells
+
+`TableStyle` sets the look of the whole table. To make *particular cells* stand out — a bold
+total, a red warning, a percentage — give them a `CellFormat`:
+
+```python
+from pyhandlexl import CellFormat, Table
+
+t = Table.read("budget.xlsx", "Budget")
+
+t.set_format(CellFormat(bold=True, fill="FFFF00"), row="Alice", column="q2")   # one cell
+t.set_format(CellFormat(number_format="0.00"), column="q1")                    # a whole column
+t.set_format(CellFormat(font_color="C00000", italic=True), row="Bob")          # a whole row
+t.write("budget.xlsx")
+
+t.get_format("Alice", "q2")     # CellFormat(bold=True, fill='FFFF00', ...)
+t.clear_format(row="Bob")       # remove them again: a row, a column, one cell, or (no arguments) all
+```
+
+A `CellFormat` has seven optional fields, and `None` means "leave that part alone", so only
+what you give is applied, on top of the table's own look (its banding stays):
+
+| field | meaning |
+|---|---|
+| `bold`, `italic` | text weight / slant, `True` or `False` |
+| `font_color` | text colour, a 6-digit hex string (`"C00000"`) |
+| `fill` | background colour, a 6-digit hex string, or `""` for no fill |
+| `number_format` | an Excel format code (`"0.00"`, `"#,##0"`, `"0%"`, `"yyyy-mm-dd"`); changes how a number or date is *shown*, never its value |
+| `align` | `"left"`, `"center"` or `"right"` |
+| `wrap` | wrap long text onto several lines inside the cell, `True` or `False`; Excel makes the row taller to fit unless the row has a fixed height |
+
+A bad value raises `ValueError` (or `TypeError` for the wrong type) when you build the `CellFormat`.
+
+- **A format belongs to its cell, not to a position.** It is keyed by the row label and
+  column header, so it stays put when you insert, drop or rename other rows and columns,
+  follows a row or column you rename, is removed with a row or column you drop, and moves
+  with the table when a neighbour grows and pushes it right. Re-adding a dropped label does
+  not bring the format back.
+- **Setting formats combines.** `set_format` on a cell that already has a format changes only
+  the fields you set (bold, then a fill, gives bold *and* filled); `clear_format` removes them.
+  `set_format` with `row=` or `column=` formats the cells that exist *now* — a row or column
+  added later is not formatted. Giving neither raises `ValueError` (use `t.style` for the
+  whole table); an unknown label raises `KeyError`.
+- **It is written on `create()` / `write()`** and stored with the table, so `Table.read` gets
+  it back. Only data cells can be formatted (not headers, row labels or the corner — that is
+  what `TableStyle` is for).
+- **Two people editing:** formats merge like values. A format only one of you changed is kept;
+  if you both formatted the same cell differently, yours wins with a `MergeConflictWarning`.
+- **Cost:** painting is done once per distinct combination of look and format, not once per
+  cell, so a table with a few formats costs about the same as one with none. A change to which
+  cells carry formats repaints the table in full on that write.
+- `t.info`, `show()` and `==` ignore formats.
+
+To read the formatting of a plain *grid*, or format its cells, see
+[Formatting grid cells](#formatting-grid-cells). For column widths, row heights and
+making long text readable, see the next section.
+
+### Column widths, row heights and fitting text
+
+By default pyhandlexl leaves the layout exactly as Excel would: every column its default
+width. Three tools change that, all optional.
+
+**Set a size yourself:**
+
+```python
+t.set_column_width("notes", 40)        # characters, up to 255
+t.set_row_height("Alice", 60)          # points, up to 409
+t.get_column_width("notes")            # 40.0  (None if not set)
+t.clear_column_width("notes")          # or clear_column_width() for every column
+t.clear_row_height()                   # likewise for rows
+t.write("budget.xlsx")
+```
+
+A size belongs to its column or row, keyed by header and label like a
+[cell format](#formatting-cells): it follows a rename, goes if the column or row is dropped,
+moves with the table when a neighbour grows, and merges with another writer's changes
+(only-one-side changes are kept; a clash goes to yours with a `MergeConflictWarning`). Only data
+columns can be given a width (the label column is sized by `fit_text` or by hand).
+
+**Let the library fit long text:**
+
+```python
+from pyhandlexl import Table, TableStyle
+
+t.style = TableStyle(fit_text=True)                 # off by default
+t.style = TableStyle(fit_text=True, max_width=40)   # change the cap (60 characters by default)
+```
+
+With `fit_text=True`, every write sizes each column to its longest line — header, label and
+data — but never wider than `max_width` characters. A cell whose text has a longer line, or a
+line break, is *wrapped* instead, and Excel makes its row as tall as the wrapped text needs on its
+own (no row height is set, so there is nothing to go stale). Short cells are left alone. It is
+stored with the table, so every later write keeps doing it, and it is decided afresh each write:
+a column narrows again if its longest value shrinks.
+
+Fitting never overrides you:
+
+- a column with a width you set with `set_column_width` keeps it;
+- a column whose width you changed **by hand in Excel** keeps that too — the library remembers the
+  width it last set for each column, and refits a column only while the sheet still shows that
+  value;
+- `CellFormat(wrap=False)` (or `wrap=True`) on a cell beats the automatic choice;
+- turning `fit_text` off again releases the widths it set.
+
+Costs and caveats: a table with `fit_text` on is repainted in full on every write, and the width
+is estimated from the text (numbers and dates by their usual length), not measured in a font, so
+it is a good fit rather than a perfect one.
+
+**A row height is shared by the whole sheet row.** Tables sit side by side, so `set_row_height`
+on one table also sets the height of that row across every table beside it. If two tables set
+different heights for the same sheet row, the one written last wins. Rows with wrapped text
+grow on their own, so a height is only needed to override that.
+
+For a plain grid the same three tools are arguments of `write_sheet` / `append_rows`: see
+[Sizing grid columns and rows](#sizing-grid-columns-and-rows).
 
 ### Restricting a column's type
 
@@ -532,7 +654,7 @@ same as always.
 ### Equality
 
 ```python
-t1 == t2   # compares data, headers, labels, corner, and column types
+t1 == t2   # compares data, headers, labels, corner, and column types — not style or cell formats
 ```
 
 A `Table` has no `len()` or `in` of its own, so the call site says what's being checked:
@@ -572,14 +694,16 @@ sales.write("shop.xlsx")                          # Inventory shifts right autom
   size, sheet, style, column types) without reading its row data.
 - **`delete_table(path, name)`** — removes a named table; `TableNotFoundError`
   if it doesn't exist. Leaves the space empty — other tables on the sheet are
-  not shifted to close the gap, and the name is free to reuse afterwards.
+  not shifted to close the gap, and the name is free to reuse afterwards. The column
+  widths and row heights the table had set are taken back.
 - Table names are **unique per workbook**, not per sheet.
 - **Growing a table's columns** (`add_column`, or writing back wider data)
   automatically shifts every table to its right, on the same sheet, further
   right to make room — this can rewrite more than one table's position in a
   single `.write()`. **Growing rows never shifts anything**, since nothing sits
   below a table. A shifted table keeps its
-  [style](#styling-a-table) at the new position.
+  [style](#styling-a-table), its [cell formats](#formatting-cells) and any formatting
+  added by hand, at the new position.
 - **Duplicate row labels/column headers within one table** are blocked the
   same way regardless of how many tables share the sheet.
 
@@ -604,7 +728,8 @@ even for someone opening the workbook by hand without having read this.
 
 **Deleting the reserved sheet on purpose.** `delete_sheet` refuses it; the explicit way is
 `delete_schema_sheet(path)`. Every table's cells stay as they are, but what only the schema
-recorded is lost — styles, column types, creation and modification dates — and the next call
+recorded is lost — styles, column types, cell formats, widths and heights, creation and
+modification dates — and the next call
 that reads the schema rebuilds it (below). It does nothing on a workbook that has no schema
 sheet.
 
@@ -642,6 +767,14 @@ schema sheet.
   imperfect: a table with exactly one data row, for instance, can never have
   its row-banding detected (there's no second row to compare against), so it
   always comes back reporting no banding even if it originally had some.
+- **Which cells carry a [cell format](#formatting-cells).** The schema is where
+  `set_format` records them, so after a rebuild `t.get_format(...)` returns `None`
+  everywhere. The cells themselves keep their look in the file, but pyhandlexl no
+  longer knows they were formatted, so a later write that repaints the table (a style
+  change, say) drops it. Set the formats again if you need them to stay managed.
+- **Widths, heights and `fit_text`.** They are recorded in the schema too, so after a rebuild
+  `get_column_width` / `get_row_height` return `None` and `fit_text` is off. The sizes stay in
+  the file as ordinary hand-set sizes, which later writes leave alone.
 - **Your declared column types.** They are *inferred* from the values each
   column currently holds — a column whose values all share one Excel-native
   type comes back restricted to it, and an empty or mixed column comes back
@@ -660,10 +793,10 @@ After a rebuild, check `t.style`, `t.column_types`, and `t.info` on the tables
 you care about, set back anything that's wrong, and `write()` it.
 
 **Workbooks written by older versions** keep working: a reserved sheet with
-fewer columns than today's (written before column types, or before creation and
-modification times, existed) is read with sensible defaults — the default
-style, unrestricted columns, `None` dates — and upgraded to the current layout
-by the next write.
+fewer columns than today's (written before column types, creation and
+modification times, cell formats, or widths and heights existed) is read with sensible
+defaults — the default style, unrestricted columns, `None` dates, no cell formats or sizes —
+and upgraded to the current layout by the next write.
 
 **Editing a table by hand.** Numeric and date headers or labels are read as text.
 A blank data cell is `None`. Duplicate labels or headers are tolerated on read.
@@ -739,8 +872,8 @@ The default (`head=5, tail=5`) shows everything with no divider if the table
 has 10 rows or fewer — truncation only kicks in past that. `rows=` overrides
 the head/tail defaults outright. Prints a bordered, column-aligned grid to the
 console **and returns that same text** — a debug convenience, unrelated to
-cell formatting in the `.xlsx` (still out of scope; see [Not in
-scope](#not-in-scope)). A value's own newlines are shown as `\n` rather than
+cell formatting in the `.xlsx` (see [Formatting cells](#formatting-cells) for
+that). A value's own newlines are shown as `\n` rather than
 left as real line breaks, which would otherwise split a row across lines.
 `rows`, `head`, and `tail` must each be a non-negative `int` or `None` — a
 negative value raises `ValueError` and a non-`int` raises `TypeError`, rather
@@ -766,7 +899,7 @@ since they only ever touch the `list[list]` these return, never a file.
 ```python
 from pyhandlexl import read_sheet, write_sheet, append_rows
 
-read_sheet(path, sheet=None, *, pad=False, orientation="rows")
+read_sheet(path, sheet=None, *, pad=False, orientation="rows", formats=False)
 ```
 
 For an **.xlsx** file: returns `list[list[object]]` — each cell as its
@@ -775,10 +908,14 @@ native type (`str`, `int`, `float`, `bool`, `datetime`, `date`, `time`,
 from each row (a fully empty row becomes `[]`); `pad=True` right-pads every
 row with `None` to the widest row's length instead. `orientation="columns"`
 returns each worksheet column as an inner list instead — the transpose of
-`"rows"`, with the same trimming/`pad` rules applied down each column.
+`"rows"`, with the same trimming/`pad` rules applied down each column. `formats=True`
+also returns each cell's formatting — see
+[Formatting grid cells](#formatting-grid-cells); it is off by default and not for a `.csv`
+file (`ValueError`).
 
 ```python
-write_sheet(path, rows, sheet=None, *, orientation="rows")
+write_sheet(path, rows, sheet=None, *, orientation="rows",
+            column_widths=None, row_heights=None, fit_text=False, max_width=60)
 ```
 
 For an **.xlsx** file: replaces the target sheet with `rows` (other sheets
@@ -787,10 +924,13 @@ type preserved — no conversion; `None` leaves the cell empty. A value that
 isn't a type Excel can store raises `CellTypeError`. `orientation="columns"`
 writes each inner list *down a column* instead of across a row. `sheet`
 must not already hold table data (`SheetKindError`) — see
-[One kind of data per sheet](#one-kind-of-data-per-sheet).
+[One kind of data per sheet](#one-kind-of-data-per-sheet). The last four arguments set sizes —
+see [Sizing grid columns and rows](#sizing-grid-columns-and-rows). Because it replaces the
+sheet, any column widths or row heights the sheet had are replaced with them.
 
 ```python
-append_rows(path, rows, sheet=None)
+append_rows(path, rows, sheet=None, *,
+            column_widths=None, row_heights=None, fit_text=False, max_width=60)
 ```
 
 For an **.xlsx** file: appends after the last row. Empty input is a no-op.
@@ -817,7 +957,9 @@ append_rows("data.csv", [["x", "y"]])
   all text. `read_sheet`'s trimming/`pad` behavior still applies, but pads
   with `""` instead of `None`.
 - **`sheet` must be `None`** — a `.csv` file has no sheets. Passing anything
-  else raises `ValueError`.
+  else raises `ValueError`. A [`Styled`](#formatting-grid-cells) value is written as just
+  its value (a CSV has no formatting), and `read_sheet(..., formats=True)` raises
+  `ValueError`; the sizing arguments of `write_sheet` / `append_rows` do too.
 - **No size limit** — `DimensionError`/`CellTypeError` never apply to a
   `.csv` write; it isn't bound by the `.xlsx` grid.
 - **The file must already exist**, exactly like `.xlsx` — call `create_csv`
@@ -891,6 +1033,72 @@ text — a debug convenience, with the same truncation rules (and the same
 [`Table.show`](#displaying-a-table), minus the header row (a grid has no
 headers to show). Ragged rows are padded with `""` for display only; the grid
 itself is untouched.
+
+### Formatting grid cells
+
+The same [`CellFormat`](#formatting-cells) works on a grid. A cell with formatting is a
+`Styled` — a value together with its format — and the `grid` helpers move it like any other
+value, so the formatting stays with the data it belongs to:
+
+```python
+from pyhandlexl import CellFormat, Styled, grid, read_sheet, write_sheet
+
+g = read_sheet("data.xlsx", formats=True)      # formatted cells come back as Styled(value, format)
+g[1][0]                                        # Styled(value=1.5, format=CellFormat(bold=True, ...))
+
+g = grid.insert_row(g, 2, ["new", Styled(0, CellFormat(fill="FFFF00"))])   # format a cell as you build it
+g = grid.delete_column(g, 1)                   # the formats in the other columns move with their values
+write_sheet("data.xlsx", g)                    # formats are written; append_rows accepts Styled too
+```
+
+- `read_sheet(..., formats=True)` returns a `Styled` for a cell that is bold or italic, has a
+  non-black text colour, a solid fill, a number format other than `General`, a left/centre/right
+  alignment, or wrapped text; every other cell is a plain value. Without `formats=True` you get plain values, as
+  always (and the read is faster). A blank cell that carries formatting comes back as
+  `Styled(None, format)`.
+- `Styled.value` is the plain value, `Styled.format` the `CellFormat`. A `Styled` value is
+  checked like any other: `write_sheet` raises `CellTypeError` if the value can't be stored.
+- `grid.show` and `grid.to_dataframe` use the plain values. Anything that compares or computes
+  on a grid's values should use `Styled.value`, or read without `formats=True`.
+- Reading formats back is approximate: only the seven `CellFormat` fields are read, and a theme
+  or indexed colour, which has no hex value, is skipped. Everything else about a cell's look is
+  rewritten away when `write_sheet` replaces the sheet — to keep other formatting, edit with
+  `append_rows`, or use openpyxl.
+- Formatting a [table](#formatting-cells) cell uses `Table.set_format` instead; `Styled` is
+  only for grids.
+
+### Sizing grid columns and rows
+
+A grid has no labels to key a size by, so sizes are given by position, on the sheet:
+
+```python
+from pyhandlexl import write_sheet, append_rows, read_dimensions
+
+write_sheet(path, g, column_widths={1: 30, 3: 12}, row_heights={1: 28})   # 1-based; characters / points
+write_sheet(path, g, fit_text=True)                  # fit the columns to the text (optional)
+write_sheet(path, g, fit_text=True, max_width=40)    # change the cap (60 by default)
+append_rows(path, more_rows, fit_text=True)
+
+d = read_dimensions(path, "Data")
+d.column_widths      # {1: 30.0, 3: 12.0} — only the widths that are set
+d.row_heights        # {1: 28.0}
+```
+
+- **Off by default** — nothing is sized unless you ask. With `fit_text=True`, each column is
+  sized to its longest value, up to `max_width` characters; a cell with a longer line (or a
+  line break) wraps, and Excel makes its row tall enough. A width in `column_widths` is
+  left as given, and `Styled(..., CellFormat(wrap=...))` beats the automatic wrapping.
+- **`append_rows` only ever widens** a column, never narrows it, and only looks at the rows it
+  adds; `row_heights` there are sheet row numbers. `write_sheet` replaces the sheet, so its sizes
+  start from nothing.
+- With `orientation="columns"` the numbers are still positions on the sheet.
+- The `grid` helpers work on values only, so inserting a column does not move a width — set the
+  widths after you have settled the layout. (Formats do move, because they travel inside the
+  `Styled` values.)
+- A width or height out of range is `ValueError`; a position that is not a positive `int` is
+  `TypeError`/`ValueError`. A `.csv` file has no sizes: passing any of these arguments raises
+  `ValueError`, and so does `read_dimensions`.
+- `read_dimensions` reads a worksheet in full, so it is slower than a plain read on a big file.
 
 ## Moving data between CSV and .xlsx
 
@@ -1283,9 +1491,10 @@ What to know before relying on it, so none of it is a surprise:
 
 ## Not in scope
 
-`pyhandlexl` deliberately does **not** handle: arbitrary cell-level
-formatting (`Table`'s own [styling](#styling-a-table) is a curated set of
-choices, not a general "format any cell" API), conditional formatting,
+`pyhandlexl` deliberately does **not** handle: formatting beyond what
+[`CellFormat`](#formatting-cells) offers (bold, italic, text colour, fill, number format,
+alignment, text wrapping — no fonts, font sizes or borders) and the
+[column widths and row heights](#column-widths-row-heights-and-fitting-text) it can set, conditional formatting,
 formulas, charts, images, merged cells, `.xls` (old format), or password
 protection / encryption. For any of that, use openpyxl directly. (Charts,
 merged cells and the like that are already in a workbook are left alone when
@@ -1295,14 +1504,15 @@ edit them.)
 ## Stability and versioning
 
 pyhandlexl follows [semantic versioning](https://semver.org/). From 1.0.0 the **public API** does
-not change incompatibly within a major version: a script that works on 1.0 works on every
-1.x release. The public API is:
+not change incompatibly within a major version: a script that works on 2.0 works on every
+2.x release (and 2.0.0 itself was a major version for the size of what it added, cell
+formatting and sizing — nothing from 1.x was removed or changed). The public API is:
 
 - every name importable from the top-level package — `import pyhandlexl` and everything in
   `pyhandlexl.__all__` — and the functions of `pyhandlexl.grid`, with their parameters (by name
   and position), what they return, and which exceptions they raise;
-- the file format: a workbook written by any 1.x release opens in any other, and the reserved
-  schema sheet is always readable by later versions.
+- the file format: a workbook written by any release since 1.0 opens in any other, and the
+  reserved schema sheet is always readable by later versions.
 
 New features arrive in minor releases and only add: new functions, new keyword arguments with
 defaults, new exception subclasses (which are always subclasses of the exception they refine, so

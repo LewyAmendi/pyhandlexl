@@ -5,7 +5,8 @@ from __future__ import annotations
 import csv
 import os
 import warnings
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from itertools import zip_longest
 from pathlib import Path
 from secrets import token_hex
@@ -13,11 +14,13 @@ from typing import Any, Literal, cast
 
 from openpyxl import Workbook
 from openpyxl.cell.read_only import EmptyCell
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.worksheet._read_only import ReadOnlyWorksheet
 from openpyxl.worksheet.worksheet import Worksheet
 
+from pyhandlexl import _dimensions as dims
 from pyhandlexl import _multi_table as mt
+from pyhandlexl._cell_format import apply_format, read_format
 from pyhandlexl._multi_table import _to_label
 from pyhandlexl._safety import (
     atomic_save,
@@ -36,8 +39,11 @@ from pyhandlexl.errors import (
     SheetKindError,
     SheetNotFoundError,
 )
+from pyhandlexl.format import CellFormat, Styled, unwrap
 from pyhandlexl.table import TableInfo
 from pyhandlexl.validate import (
+    MAX_COLUMNS,
+    MAX_ROWS,
     check_cell_value,
     check_dimensions,
     check_sheet_name,
@@ -105,6 +111,148 @@ def _normalized(grid: list[list[object]]) -> list[list[object]]:
     breaks stored the way Excel stores them (see
     :func:`~pyhandlexl.validate.normalize_newlines`)."""
     return [[normalize_newlines(normalize_cell_value(value)) for value in row] for row in grid]
+
+
+def _split_styled(
+    grid: list[list[object]],
+) -> tuple[list[list[object]], dict[tuple[int, int], CellFormat]]:
+    """*grid* with every ``Styled`` replaced by its value, and the formats it carried keyed by
+    (0-based row, 0-based column). Returns *grid* itself when nothing is styled."""
+    formats: dict[tuple[int, int], CellFormat] = {}
+    for i, row in enumerate(grid):
+        for j, value in enumerate(row):
+            if isinstance(value, Styled):
+                formats[(i, j)] = value.format
+    if not formats:
+        return grid, formats
+    return [[unwrap(value) for value in row] for row in grid], formats
+
+
+def _apply_formats(
+    worksheet: Worksheet, first_row: int, formats: dict[tuple[int, int], CellFormat]
+) -> None:
+    """Apply *formats* (keyed by 0-based row and column within the appended block) to the
+    cells of *worksheet* whose first row is *first_row*."""
+    for (i, j), fmt in formats.items():
+        apply_format(worksheet.cell(row=first_row + i, column=j + 1), fmt)
+
+
+@dataclass(frozen=True)
+class Dimensions:
+    """The column widths and row heights a worksheet sets explicitly — see
+    :func:`read_dimensions`. Both map a 1-based column or row number to its size."""
+
+    column_widths: dict[int, float]
+    row_heights: dict[int, float]
+
+
+def _checked_sizes(
+    column_widths: Mapping[int, float] | None,
+    row_heights: Mapping[int, float] | None,
+    max_width: int,
+) -> tuple[dict[int, float], dict[int, float]]:
+    """Validate the sizing arguments of write_sheet / append_rows."""
+    dims.check_max_width(max_width)
+    widths: dict[int, float] = {}
+    heights: dict[int, float] = {}
+    for source, limit, check, target, what in (
+        (column_widths, MAX_COLUMNS, dims.check_width, widths, "column"),
+        (row_heights, MAX_ROWS, dims.check_height, heights, "row"),
+    ):
+        if source is not None and not isinstance(source, Mapping):
+            raise TypeError(
+                f"{what}_{'widths' if what == 'column' else 'heights'} must be a mapping of "
+                f"{what} number to size, got {type(source).__name__}"
+            )
+        for position, size in (source or {}).items():
+            if isinstance(position, bool) or not isinstance(position, int):
+                raise TypeError(f"{what} numbers must be int, got {type(position).__name__}")
+            if not 1 <= position <= limit:
+                raise ValueError(f"{what} {position} is out of range (1..{limit})")
+            target[position] = check(size)
+    return widths, heights
+
+
+def _size_sheet(
+    worksheet: Worksheet,
+    grid: list[list[object]],
+    first_row: int,
+    cell_formats: dict[tuple[int, int], CellFormat],
+    widths: dict[int, float],
+    heights: dict[int, float],
+    fit_text: bool,
+    max_width: int,
+) -> None:
+    """Apply explicit widths and heights, and with *fit_text* fit the columns the block of
+    *grid* (whose first row is sheet row *first_row*) sits in: a column only ever grows to
+    its longest line (capped at *max_width*), a width you gave is left as it is, and a cell
+    with a longer line or a line break wraps unless its own format says otherwise."""
+    for column, width in widths.items():
+        dims.set_column_width(worksheet, column, width)
+    for row, height in heights.items():
+        dims.set_row_height(worksheet, row, height)
+    if not fit_text:
+        return
+    longest: dict[int, int] = {}
+    for i, line in enumerate(grid):
+        for j, value in enumerate(line):
+            column = j + 1
+            longest[column] = max(longest.get(column, 0), dims.longest_line(value))
+            if dims.needs_wrap(value, max_width):
+                fmt = cell_formats.get((i, j))
+                if fmt is None or fmt.wrap is None:
+                    apply_format(
+                        worksheet.cell(row=first_row + i, column=column), CellFormat(wrap=True)
+                    )
+    for column, length in longest.items():
+        if column in widths:
+            continue
+        wanted = dims.fit_width(length, max_width)
+        current = dims.get_column_width(worksheet, column)
+        if current is None or wanted > current:
+            dims.set_column_width(worksheet, column, wanted)
+
+
+def read_dimensions(path: str | Path, sheet: str | None = None) -> Dimensions:
+    """The column widths and row heights a worksheet sets explicitly.
+
+    Only sizes that are set appear — a column or row left at Excel's default is absent.
+    The counterpart of the ``column_widths=`` and ``row_heights=`` arguments of
+    :func:`write_sheet`; for a table's own sizes use ``Table.get_column_width`` and
+    ``Table.get_row_height``.
+
+    Raises:
+        FileNotFoundError: no file at *path*.
+        InvalidFileError: the file is not a readable .xlsx.
+        SheetNotFoundError: *sheet* names a worksheet that does not exist.
+        ValueError: *path* is a .csv file, which has no sizes.
+    """
+    path = Path(path)
+    if _is_csv_path(path):
+        raise ValueError("a .csv file has no column widths or row heights")
+    workbook = safe_load(path)
+    try:
+        if sheet is None:
+            worksheet = _active(workbook)
+        elif sheet in workbook.sheetnames:
+            worksheet = workbook[sheet]
+        else:
+            raise SheetNotFoundError(f"no worksheet named {sheet!r}")
+        column_widths: dict[int, float] = {}
+        for dim in worksheet.column_dimensions.values():
+            if dim.width is None:
+                continue
+            low = dim.min or column_index_from_string(dim.index)
+            for column in range(low, (dim.max or low) + 1):
+                column_widths[column] = float(dim.width)
+        row_heights = {
+            int(row): float(dim.height)
+            for row, dim in worksheet.row_dimensions.items()
+            if dim.height is not None
+        }
+    finally:
+        workbook.close()
+    return Dimensions(column_widths, dict(sorted(row_heights.items())))
 
 
 def _checked_grid(rows: Iterable[Iterable[object]]) -> list[list[object]]:
@@ -298,6 +446,7 @@ def read_sheet(
     *,
     pad: bool = False,
     orientation: Orientation = "rows",
+    formats: bool = False,
 ) -> list[list[object]]:
     """Read a worksheet — or a .csv file — as a list of rows (or columns).
 
@@ -319,19 +468,27 @@ def read_sheet(
         orientation: ``"rows"`` (default) returns each worksheet row as an
             inner list; ``"columns"`` returns each worksheet column as an
             inner list instead — the transpose of ``"rows"``.
+        formats: if true, a cell that carries formatting (bold, italic, a text or
+            fill colour, a number format other than General, or an alignment) comes
+            back as a :class:`~pyhandlexl.format.Styled` — its value plus a
+            :class:`~pyhandlexl.format.CellFormat` — so the formatting can be edited
+            with the ``grid`` helpers and written back with :func:`write_sheet`. Off by
+            default, which keeps plain values and is faster. Not for a .csv file.
 
     Raises:
         FileNotFoundError: no file at *path*.
         InvalidFileError: the file is not a readable .xlsx.
         SheetNotFoundError: *sheet* names a worksheet that does not exist.
         ValueError: *orientation* is not ``"rows"`` or ``"columns"``, or
-            *sheet* is given for a .csv file.
+            *sheet* or *formats* is given for a .csv file.
     """
     if orientation not in ("rows", "columns"):
         raise ValueError(f"orientation must be 'rows' or 'columns', got {orientation!r}")
 
     path = Path(path)
     if _is_csv_path(path):
+        if formats:
+            raise ValueError("formats is not meaningful for a .csv file")
         if sheet is not None:
             raise ValueError("sheet is not meaningful for a .csv file")
         if not path.exists():
@@ -357,6 +514,10 @@ def read_sheet(
                     for position, cell in enumerate(cells, start=1):
                         if cell.data_type == "f":
                             formulas.append(f"{get_column_letter(position)}{number}")
+                        if formats and type(cell) is not EmptyCell:
+                            fmt = read_format(cell)
+                            if not fmt.is_empty():
+                                row[position - 1] = Styled(cell.value, fmt)
                     if any(type(cell) is not EmptyCell for cell in cells):
                         last = number
                     while row and row[-1] is None:
@@ -394,6 +555,10 @@ def write_sheet(
     sheet: str | None = None,
     *,
     orientation: Orientation = "rows",
+    column_widths: Mapping[int, float] | None = None,
+    row_heights: Mapping[int, float] | None = None,
+    fit_text: bool = False,
+    max_width: int = 60,
 ) -> None:
     """Replace a worksheet's contents with *rows* — or a whole .csv file's.
 
@@ -414,6 +579,12 @@ def write_sheet(
             ``None`` for a .csv file.
         orientation: ``"rows"`` writes each inner iterable as a row;
             ``"columns"`` writes each inner iterable down a column.
+        column_widths: column number (1-based, on the sheet) to width in characters.
+        row_heights: row number (1-based, on the sheet) to height in points.
+        fit_text: size each column to its longest value and wrap the text that is longer
+            than *max_width*, so long text can be read. Off by default; a column given in
+            *column_widths* is left as set. Not for a .csv file.
+        max_width: the widest a fitted column gets, in characters (default 60).
 
     Raises:
         FileNotFoundError: no file at *path*.
@@ -425,19 +596,24 @@ def write_sheet(
         DimensionError: the data exceeds the .xlsx row or column limits
             (.xlsx only — a .csv file has no size limit).
         ValueError: *orientation* is not ``"rows"`` or ``"columns"``, *sheet*
-            is given for a .csv file, or *sheet* differs from an existing
+            is given for a .csv file, a width, height or position is out of range,
+            or *sheet* differs from an existing
             worksheet's name only by capitalisation (Excel treats those as
             the same name).
     """
     if orientation not in ("rows", "columns"):
         raise ValueError(f"orientation must be 'rows' or 'columns', got {orientation!r}")
+    widths, heights = _checked_sizes(column_widths, row_heights, max_width)
 
     path = Path(path)
     grid = [_as_row(row) for row in rows]
     if orientation == "columns":
         grid = [list(column) for column in zip_longest(*grid, fillvalue=None)]
+    grid, cell_formats = _split_styled(grid)  # a CSV has no formatting: the values only
 
     if _is_csv_path(path):
+        if widths or heights or fit_text:
+            raise ValueError("column_widths, row_heights and fit_text are not meaningful for .csv")
         if sheet is not None:
             raise ValueError("sheet is not meaningful for a .csv file")
         if not path.exists():
@@ -477,6 +653,8 @@ def write_sheet(
         for row in grid:
             worksheet.append(row)
             _keep_text(worksheet, row)
+        _apply_formats(worksheet, 1, cell_formats)
+        _size_sheet(worksheet, grid, 1, cell_formats, widths, heights, fit_text, max_width)
         atomic_save(workbook, path)
     finally:
         workbook.close()
@@ -486,6 +664,11 @@ def append_rows(
     path: str | Path,
     rows: Iterable[Iterable[object]],
     sheet: str | None = None,
+    *,
+    column_widths: Mapping[int, float] | None = None,
+    row_heights: Mapping[int, float] | None = None,
+    fit_text: bool = False,
+    max_width: int = 60,
 ) -> None:
     """Append *rows* to the end of a worksheet — or a .csv file.
 
@@ -523,6 +706,12 @@ def append_rows(
         rows: an iterable of iterables of cell values.
         sheet: worksheet name, or ``None`` for the active sheet. Must be
             ``None`` for a .csv file.
+        column_widths: column number (1-based) to width in characters.
+        row_heights: sheet row number (1-based) to height in points.
+        fit_text: widen each column the new rows are in to fit their longest value (never
+            narrower than it already is, and no wider than *max_width*), and wrap the new
+            text that is longer. Off by default. Not for a .csv file.
+        max_width: the widest a fitted column gets, in characters (default 60).
 
     Raises:
         FileNotFoundError: no file at *path*.
@@ -532,15 +721,20 @@ def append_rows(
         CellTypeError: a value is not a type Excel can store (.xlsx only).
         DimensionError: appending would exceed the .xlsx row or column
             limits (.xlsx only).
-        ValueError: *sheet* is given for a .csv file, or differs from an
+        ValueError: *sheet* is given for a .csv file, a width, height or position is out
+            of range, or the name differs from an
             existing worksheet's name only by capitalisation.
     """
+    widths, heights = _checked_sizes(column_widths, row_heights, max_width)
     path = Path(path)
     grid = [_as_row(row) for row in rows]
     if not grid:
         return
+    grid, cell_formats = _split_styled(grid)
 
     if _is_csv_path(path):
+        if widths or heights or fit_text:
+            raise ValueError("column_widths, row_heights and fit_text are not meaningful for .csv")
         if sheet is not None:
             raise ValueError("sheet is not meaningful for a .csv file")
         if not path.exists():
@@ -584,6 +778,10 @@ def append_rows(
         for row in grid:
             worksheet.append(row)
             _keep_text(worksheet, row)
+        # append() leaves _current_row on the block's last row
+        first_row = cast(Any, worksheet)._current_row - len(grid) + 1
+        _apply_formats(worksheet, first_row, cell_formats)
+        _size_sheet(worksheet, grid, first_row, cell_formats, widths, heights, fit_text, max_width)
         atomic_save(workbook, path)
     finally:
         workbook.close()
@@ -876,7 +1074,8 @@ def delete_table(path: str | Path, name: str) -> None:
     """Remove the named table called *name*.
 
     The space it occupied is left empty — other tables on the sheet are not
-    shifted to close the gap.
+    shifted to close the gap. The column widths and row heights the table set are taken
+    back (one you changed by hand is left).
 
     Raises:
         FileNotFoundError: no file at *path*.
@@ -889,6 +1088,7 @@ def delete_table(path: str | Path, name: str) -> None:
         entry = mt.verify_or_locate(workbook, entry)
         ws = workbook[entry.sheet]
         mt.clear_region(ws, entry.anchor_row, entry.anchor_col, entry.height, entry.width)
+        mt.release_dimensions(ws, entry)
         del entries[name]
         mt.save_schema(workbook, entries)
         atomic_save(workbook, path)
@@ -901,7 +1101,8 @@ def delete_schema_sheet(path: str | Path) -> None:
 
     This is the one explicit way to remove it; :func:`delete_sheet` refuses. Every table's
     data stays exactly where it is, but what only the schema recorded is lost: each table's
-    style, its column types, and its creation and modification dates. The next call that
+    style, its column types, its cell formats, widths and heights, and its creation and
+    modification dates. The next call that
     reads the schema rebuilds it by scanning for tables and emits ``SchemaRebuiltWarning``
     (see the README's "Multiple named tables on one sheet"). A workbook without a schema
     sheet is left untouched.

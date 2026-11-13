@@ -25,7 +25,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import copy
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal, cast
 
@@ -37,7 +37,15 @@ from openpyxl.styles.cell_style import StyleArray
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from pyhandlexl import _dimensions as dims
 from pyhandlexl import _safety
+from pyhandlexl._cell_format import (
+    apply_format,
+    dims_from_json,
+    dims_to_json,
+    formats_from_json,
+    formats_to_json,
+)
 from pyhandlexl._merge import Snapshot
 from pyhandlexl._safety import damage_is_invalid, safe_load_readonly
 from pyhandlexl.column_type import ColumnType
@@ -50,6 +58,7 @@ from pyhandlexl.errors import (
     TableExistsError,
     TableNotFoundError,
 )
+from pyhandlexl.format import CellFormat
 from pyhandlexl.style import TableStyle
 from pyhandlexl.validate import MAX_CELL_CHARS
 
@@ -137,6 +146,8 @@ _SCHEMA_HEADER = (
     "created_at",
     "modified_at",
 )
+# Cell formats (1.2.0) are JSON chunks in the columns after these; a table with none adds nothing.
+_BASE_COLUMNS = len(_SCHEMA_HEADER)
 
 
 def _to_label(value: object) -> str:
@@ -158,6 +169,14 @@ class TableEntry:
     column_types: list[ColumnType]  # one per data column, in order
     created_at: datetime | None  # None only if recovered by rebuild_schema
     modified_at: datetime | None  # None only if recovered by rebuild_schema
+    # cell formats, keyed by (data row index, data column index) as the table is written
+    formats: dict[tuple[int, int], CellFormat] = field(default_factory=dict)
+    # widths the owner set with set_column_width, keyed by local column (1 = first data column)
+    widths: dict[int, float] = field(default_factory=dict)
+    # row heights set with set_row_height, keyed by data row index
+    heights: dict[int, float] = field(default_factory=dict)
+    # widths the library fitted itself (TableStyle.fit_text), keyed by local column (0 = labels)
+    auto_widths: dict[int, float] = field(default_factory=dict)
 
     @property
     def height(self) -> int:
@@ -171,7 +190,11 @@ class TableEntry:
 
 
 def _style_to_json(style: TableStyle) -> str:
-    return json.dumps(asdict(style), separators=(",", ":"))
+    # fit_text and max_width are stored separately (see dims_to_json), so a workbook that
+    # doesn't use them keeps a style an older version can read.
+    fields_ = asdict(style)
+    del fields_["fit_text"], fields_["max_width"]
+    return json.dumps(fields_, separators=(",", ":"))
 
 
 def _style_from_json(value: str) -> TableStyle:
@@ -283,7 +306,12 @@ def _parse_schema(ws: Any) -> dict[str, TableEntry]:
         # Schemas written by older versions have fewer columns (7 before column
         # types, 8 before creation/modification times) — read what's there and
         # default the rest; the next save upgrades the sheet.
-        cells: list[Any] = [*row[:10], *([None] * (10 - len(row[:10])))]
+        cells: list[Any] = [
+            *row[:_BASE_COLUMNS],
+            *([None] * (_BASE_COLUMNS - len(row[:_BASE_COLUMNS]))),
+        ]
+        # Cell formats (added in 1.2.0) are JSON chunks in the columns after the tenth.
+        chunks = [c for c in row[_BASE_COLUMNS:] if isinstance(c, str) and c]
         (
             name,
             sheet,
@@ -296,6 +324,10 @@ def _parse_schema(ws: Any) -> dict[str, TableEntry]:
             created_at,
             modified_at,
         ) = cells
+        widths, heights, auto_widths, fit = dims_from_json(chunks)
+        style = _style_from_json(style_json) if style_json else TableStyle.DEFAULT
+        if fit is not None:
+            style = replace(style, fit_text=fit[0], max_width=fit[1])
         entries[name] = TableEntry(
             name,
             sheet,
@@ -303,12 +335,16 @@ def _parse_schema(ws: Any) -> dict[str, TableEntry]:
             int(anchor_col),
             int(n_rows),
             int(n_cols),
-            _style_from_json(style_json) if style_json else TableStyle.DEFAULT,
+            style,
             _column_types_from_json(column_types_json)
             if column_types_json
             else [ColumnType.ANY] * int(n_cols),
             _datetime_from_str(created_at),
             _datetime_from_str(modified_at),
+            formats_from_json(chunks),
+            widths,
+            heights,
+            auto_widths,
         )
     return entries
 
@@ -333,21 +369,39 @@ def save_schema(workbook: Workbook, entries: dict[str, TableEntry]) -> None:
             )
         ws = workbook.create_sheet(SCHEMA_SHEET)
     ws.sheet_properties.tabColor = _SCHEMA_TAB_COLOR
-    ws.append(list(_SCHEMA_HEADER))
-    ws["A1"].comment = Comment(_SCHEMA_WARNING, "pyhandlexl")
+    rows: list[list[Any]] = []
     for e in entries.values():
-        row = [
-            e.name,
-            e.sheet,
-            e.anchor_row,
-            e.anchor_col,
-            e.n_rows,
-            e.n_cols,
-            _style_to_json(e.style),
-            _column_types_to_json(e.column_types),
-            _datetime_to_str(e.created_at),
-            _datetime_to_str(e.modified_at),
-        ]
+        rows.append(
+            [
+                e.name,
+                e.sheet,
+                e.anchor_row,
+                e.anchor_col,
+                e.n_rows,
+                e.n_cols,
+                _style_to_json(e.style),
+                _column_types_to_json(e.column_types),
+                _datetime_to_str(e.created_at),
+                _datetime_to_str(e.modified_at),
+                *formats_to_json(e.formats),
+                *dims_to_json(
+                    e.widths,
+                    e.heights,
+                    e.auto_widths,
+                    (e.style.fit_text, e.style.max_width)
+                    if e.style.fit_text or e.style.max_width != TableStyle.DEFAULT.max_width
+                    else None,
+                ),
+            ]
+        )
+    # Formatted cells are stored in extra columns after the base ones, as many as the most
+    # formatted table needs (none at all if no table has a format).
+    widest = max(map(len, rows), default=0)
+    extra = range(1, widest - _BASE_COLUMNS + 1)
+    header = [*_SCHEMA_HEADER, *(("formats" if n == 1 else f"formats{n}") for n in extra)]
+    ws.append(header)
+    ws["A1"].comment = Comment(_SCHEMA_WARNING, "pyhandlexl")
+    for row in rows:
         ws.append(row)
         for column, value in enumerate(row, start=1):
             if isinstance(value, str) and value.startswith("="):  # a table named "=x"
@@ -806,7 +860,11 @@ def clear_for_rewrite(
 
 
 def stable_extent(
-    entry: TableEntry, new_n_rows: int, new_n_cols: int, new_style: TableStyle
+    entry: TableEntry,
+    new_n_rows: int,
+    new_n_cols: int,
+    new_style: TableStyle,
+    new_formats: dict[tuple[int, int], CellFormat] | None = None,
 ) -> tuple[int, int]:
     """How much of *entry*'s block keeps exactly the look it has if it becomes the given size.
 
@@ -816,9 +874,12 @@ def stable_extent(
     a row's parity, and a border only on whether a cell is in the header, the label column,
     the last row or the last column — so a cell's look changes only if the style does, or if
     it was, or now is, on the last row or column. ``(0, 0)`` means repaint everything.
+    Cell formats belong to cells, not positions, so if which cells carry which format has
+    changed (a formatted row moved, was dropped, or a format was set or cleared) the whole
+    table is repainted.
     """
-    if entry.style != new_style:
-        return 0, 0
+    if entry.style != new_style or new_style.fit_text or entry.formats != (new_formats or {}):
+        return 0, 0  # (fit_text can wrap a different set of cells on every write)
     rows = new_n_rows + 1 if new_n_rows == entry.n_rows else min(new_n_rows, entry.n_rows)
     cols = new_n_cols + 1 if new_n_cols == entry.n_cols else min(new_n_cols, entry.n_cols)
     return rows, cols
@@ -939,14 +1000,21 @@ def paint_table(ws: Worksheet, entry: TableEntry, row_limit: int = 0, col_limit:
             apply(cell, record)
 
     def data(cell: Any, r: int, c: int, banded: bool) -> None:
-        key = ("data", banded, weights(r, c))
+        # A cell format sits on top of the table's own look, so it is part of the look's key
+        # and is painted once per distinct combination, like everything else here.
+        fmt = entry.formats.get((r - 1, c - 1)) if entry.formats else None
+        key = ("data", banded, weights(r, c), fmt)
         record = looks.get(key)
         if record is None:
             _paint_data(cell, style, banded)
             _paint_border(cell, r, c, entry.n_rows, entry.n_cols, style)
+            if fmt is not None:
+                apply_format(cell, fmt)
             looks[key] = copy(cell._style)
         else:
             apply(cell, record)
+            if fmt is not None and fmt.number_format is not None:
+                cell._style.numFmtId = record.numFmtId  # the format's own, not the value's
 
     header_row = entry.anchor_row + 1
     for r in range(entry.n_rows + 1):
@@ -1054,27 +1122,131 @@ def shift_right(
 ) -> None:
     """Move every table to the right of *entry* on its sheet further right by *growth* columns.
 
-    Reads every affected region into memory before clearing or writing
-    anything, so overlapping moves can never clobber each other. Repaints
-    each moved table at its new position — its style doesn't change, but
-    the styled cells themselves are new ones — and updates *entries* in
-    place.
+    Reads every affected region — values *and* each cell's style record — into memory before
+    clearing or writing anything, so overlapping moves can never clobber each other. The
+    style records are copied across with the values, so a moved table looks exactly as it
+    did, hand formatting and cell formats included; nothing is repainted. Updates *entries*
+    in place.
     """
     to_shift = tables_to_shift(entries, entry)
     if not to_shift:
         return
     ws = workbook[entry.sheet]
     contents = [
-        (e, read_region(ws, e.anchor_row, e.anchor_col, e.height, e.width)) for e in to_shift
+        (
+            e,
+            read_region(ws, e.anchor_row, e.anchor_col, e.height, e.width),
+            _read_styles(ws, e.anchor_row, e.anchor_col, e.height, e.width),
+        )
+        for e in to_shift
     ]
-    for e, _ in contents:
+    # Column widths belong to the sheet's columns, so they have to be carried along as well.
+    widths = [
+        {
+            c: w
+            for c in range(e.anchor_col, e.anchor_col + e.width)
+            if (w := dims.get_column_width(ws, c)) is not None
+        }
+        for e in to_shift
+    ]
+    for e, _, _ in contents:
         clear_region(ws, e.anchor_row, e.anchor_col, e.height, e.width)
-    for e, grid in contents:
+    for block in widths:
+        for c in block:
+            dims.set_column_width(ws, c, None)
+    for (e, grid, styles), block in zip(contents, widths, strict=True):
         new_col = e.anchor_col + growth
         write_region(ws, e.anchor_row, new_col, grid)
-        moved = replace(e, anchor_col=new_col)
-        entries[e.name] = moved
-        paint_table(ws, moved)
+        _write_styles(ws, e.anchor_row, new_col, styles)
+        for c, w in block.items():
+            dims.set_column_width(ws, c + growth, w)
+        entries[e.name] = replace(e, anchor_col=new_col)
+
+
+_WRAP = CellFormat(wrap=True)
+
+
+def _same(a: float | None, b: float | None) -> bool:
+    return a is not None and b is not None and abs(a - b) < 1e-6
+
+
+def release_dimensions(ws: Worksheet, entry: TableEntry) -> None:
+    """Take back the widths and heights *entry* set on *ws*, where the sheet still shows
+    exactly what it set — a size changed by hand since is the owner's, and stays."""
+    for c, w in {**entry.auto_widths, **entry.widths}.items():
+        col = entry.anchor_col + c
+        if _same(dims.get_column_width(ws, col), w):
+            dims.set_column_width(ws, col, None)
+    for i, h in entry.heights.items():
+        row = entry.anchor_row + 2 + i
+        if _same(dims.get_row_height(ws, row), h):
+            dims.set_row_height(ws, row, None)
+
+
+def apply_dimensions(
+    ws: Worksheet, old: TableEntry | None, new: TableEntry, grid: list[list[object]]
+) -> TableEntry:
+    """Set *new*'s column widths and row heights on *ws*; return *new* with the widths that
+    ``TableStyle.fit_text`` chose recorded in it.
+
+    *old* is the entry as it stood before this write (``None`` for a table being created) and
+    *grid* the table as written: the corner and headers first, then each label with its data.
+
+    What the library set last time is released first, but only where the sheet still shows
+    exactly what it set — a width or height changed by hand since is the owner's, and stays.
+    Then the widths and heights given with ``set_column_width`` / ``set_row_height`` are
+    applied, and, with ``fit_text`` on, every other column that has no width of its own is
+    sized to its longest line (no wider than ``max_width``), and each cell with a longer line
+    — or a line break — wraps.
+    """
+    if old is not None:
+        release_dimensions(ws, old)
+    for c, w in new.widths.items():
+        dims.set_column_width(ws, new.anchor_col + c, w)
+    for i, h in new.heights.items():
+        dims.set_row_height(ws, new.anchor_row + 2 + i, h)
+
+    auto: dict[int, float] = {}
+    if new.style.fit_text:
+        cap = new.style.max_width
+        longest = [0] * new.width
+        for line in grid:
+            for c, value in enumerate(line):
+                longest[c] = max(longest[c], dims.longest_line(value))
+        for c in range(new.width):
+            col = new.anchor_col + c
+            if c in new.widths or dims.get_column_width(ws, col) is not None:
+                continue  # given a width of its own, by the owner or by hand
+            auto[c] = dims.fit_width(longest[c], cap)
+            dims.set_column_width(ws, col, auto[c])
+        for r, line in enumerate(grid):
+            for c, value in enumerate(line):
+                if not dims.needs_wrap(value, cap):
+                    continue
+                fmt = new.formats.get((r - 1, c - 1)) if r and c else None
+                if fmt is not None and fmt.wrap is not None:
+                    continue  # an explicit CellFormat(wrap=...) wins
+                apply_format(ws.cell(row=new.anchor_row + 1 + r, column=new.anchor_col + c), _WRAP)
+    return replace(new, auto_widths=auto)
+
+
+def _read_styles(ws: Worksheet, top: int, left: int, height: int, width: int) -> list[list[Any]]:
+    """A copy of every cell's style record in the block (``None`` for a cell without one)."""
+    styles: list[list[Any]] = []
+    for r in range(top, top + height):
+        line = []
+        for c in range(left, left + width):
+            own = cast(Any, ws.cell(row=r, column=c))._style  # ._style isn't in the stubs
+            line.append(copy(own) if own is not None else None)
+        styles.append(line)
+    return styles
+
+
+def _write_styles(ws: Worksheet, top: int, left: int, styles: list[list[Any]]) -> None:
+    for i, line in enumerate(styles):
+        for j, record in enumerate(line):
+            if record is not None:
+                cast(Any, ws.cell(row=top + i, column=left + j))._style = record
 
 
 # ------------------------------------------------- reading a table's state
@@ -1116,5 +1288,12 @@ def read_table(ws: Any, entry: TableEntry) -> tuple[Snapshot, list[str]]:
         corner=_to_label(block[0][0]),
         style=entry.style,
         column_types=list(entry.column_types),
+        formats={
+            (labels[i], headers[j]): fmt
+            for (i, j), fmt in entry.formats.items()
+            if i < len(labels) and j < len(headers)
+        },
+        col_widths={headers[c - 1]: w for c, w in entry.widths.items() if 1 <= c <= len(headers)},
+        row_heights={labels[i]: h for i, h in entry.heights.items() if i < len(labels)},
     )
     return snapshot, formulas

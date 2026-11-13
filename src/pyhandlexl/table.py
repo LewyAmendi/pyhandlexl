@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from openpyxl.utils import coordinate_to_tuple
 
+from pyhandlexl import _dimensions as dims
 from pyhandlexl import _display, _frames
 from pyhandlexl import _multi_table as mt
 from pyhandlexl._merge import MergeReport, Snapshot, merge, same_state
@@ -37,6 +38,7 @@ from pyhandlexl.errors import (
     SheetKindError,
     SheetNotFoundError,
 )
+from pyhandlexl.format import CellFormat
 from pyhandlexl.style import TableStyle
 from pyhandlexl.validate import (
     check_cell_value,
@@ -205,6 +207,12 @@ class Table:
                 except ValueError:
                     raise KeyError(f"no column headed {header!r}") from None
                 self._column_types[index] = column_type
+        # Cell formats, keyed by (row label, column header) so they stay on their cell however
+        # the table is edited — see set_format().
+        self._formats: dict[tuple[str, str], CellFormat] = {}
+        # Column widths (by header) and row heights (by label), likewise — see set_column_width().
+        self._col_widths: dict[str, float] = {}
+        self._row_heights: dict[str, float] = {}
         # Set only by create()/read()/write() — a freshly built Table has no
         # sheet or history until it's actually placed somewhere.
         self._sheet: str | None = None
@@ -335,6 +343,9 @@ class Table:
             style=entry.style,
         )
         table._column_types = list(entry.column_types)
+        table._formats = dict(snapshot.formats)
+        table._col_widths = dict(snapshot.col_widths)
+        table._row_heights = dict(snapshot.row_heights)
         table._sheet = entry.sheet
         table._created_at = entry.created_at
         table._modified_at = entry.modified_at
@@ -463,6 +474,9 @@ class Table:
             self._corner,
             self._style,
             list(self._column_types),
+            dict(self._formats),
+            dict(self._col_widths),
+            dict(self._row_heights),
         )
 
     def _adopt(self, snapshot: Snapshot) -> None:
@@ -472,6 +486,31 @@ class Table:
         self._corner = snapshot.corner
         self._style = snapshot.style
         self._column_types = list(snapshot.column_types)
+        self._formats = dict(snapshot.formats)
+        self._col_widths = dict(snapshot.col_widths)
+        self._row_heights = dict(snapshot.row_heights)
+
+    def _positional_widths(self) -> dict[int, float]:
+        """Column widths keyed by local column (1 = the first data column), as stored."""
+        cols = {header: j + 1 for j, header in enumerate(self._column_headers)}
+        return {cols[h]: w for h, w in self._col_widths.items() if h in cols}
+
+    def _positional_heights(self) -> dict[int, float]:
+        """Row heights keyed by data row index, as stored."""
+        rows = {label: i for i, label in enumerate(self._row_labels)}
+        return {rows[r]: h for r, h in self._row_heights.items() if r in rows}
+
+    def _positional_formats(self) -> dict[tuple[int, int], CellFormat]:
+        """The cell formats keyed by (data row index, data column index), as they are stored."""
+        if not self._formats:
+            return {}
+        rows = {label: i for i, label in enumerate(self._row_labels)}
+        cols = {header: j for j, header in enumerate(self._column_headers)}
+        return {
+            (rows[row], cols[column]): fmt
+            for (row, column), fmt in self._formats.items()
+            if row in rows and column in cols
+        }
 
     def _set_base(self) -> None:
         """Remember the current state as what's on disk, for the next write's merge."""
@@ -889,6 +928,8 @@ class Table:
         del self._data[i]
         del self._row_labels[i]
         self._row_origin.pop(label, None)
+        self._formats = {k: f for k, f in self._formats.items() if k[0] != label}
+        self._row_heights.pop(label, None)
 
     def drop_column(self, header: str) -> None:
         """Remove the column headed *header*.
@@ -902,6 +943,8 @@ class Table:
         del self._column_headers[j]
         del self._column_types[j]
         self._column_origin.pop(header, None)
+        self._formats = {k: f for k, f in self._formats.items() if k[1] != header}
+        self._col_widths.pop(header, None)
         for data_row in self._data:
             del data_row[j]
 
@@ -917,6 +960,11 @@ class Table:
         self._row_labels[i] = new
         if new != old:
             self._row_origin[new] = self._row_origin.pop(old, None)
+            self._formats = {
+                ((new if k[0] == old else k[0]), k[1]): f for k, f in self._formats.items()
+            }
+            if old in self._row_heights:
+                self._row_heights[new] = self._row_heights.pop(old)
 
     def rename_column(self, old: str, new: str) -> None:
         """Change a column header; *new* must not already be in use (``ValueError``)."""
@@ -930,6 +978,131 @@ class Table:
         self._column_headers[j] = new
         if new != old:
             self._column_origin[new] = self._column_origin.pop(old, None)
+            self._formats = {
+                (k[0], (new if k[1] == old else k[1])): f for k, f in self._formats.items()
+            }
+            if old in self._col_widths:
+                self._col_widths[new] = self._col_widths.pop(old)
+
+    # ------------------------------------------------------------ cell formats
+
+    def _format_targets(self, row: str | None, column: str | None) -> list[tuple[str, str]]:
+        """The (row label, column header) cells that *row* / *column* select: one cell if both
+        are given, a whole row or column if one is, every cell if neither."""
+        rows = [row] if row is not None else self._row_labels
+        columns = [column] if column is not None else self._column_headers
+        if row is not None:
+            self._row_index(row)  # KeyError for an unknown label
+        if column is not None:
+            self._column_index(column)
+        return [(r, c) for r in rows for c in columns]
+
+    def set_format(
+        self, format: CellFormat, *, row: str | None = None, column: str | None = None
+    ) -> None:
+        """Format data cells — one cell, a whole row, or a whole column.
+
+        Give *row* and *column* (a row label and a column header) for a single cell, only
+        *row* for every cell in that row, or only *column* for every cell in that column;
+        giving neither is a ``ValueError`` (use :attr:`style` for the table as a whole).
+        The format belongs to the cell, so it stays with it when the table is edited (rows
+        or columns inserted, dropped or renamed) and when other tables growing beside it
+        move this one. It is applied, on top of the table's :class:`~pyhandlexl.TableStyle`,
+        and stored in the file on the next :meth:`create` / :meth:`write`.
+
+        Only the fields you set in *format* change: a cell that is already bold and gets
+        ``CellFormat(fill="FFFF00")`` is bold *and* yellow. Use :meth:`clear_format` to
+        remove formatting. A row or column that is added later is not formatted.
+        """
+        if not isinstance(format, CellFormat):
+            raise TypeError(f"format must be a CellFormat, got {type(format).__name__}")
+        if row is None and column is None:
+            raise ValueError("give row=, column=, or both — to style the whole table use .style")
+        for cell in self._format_targets(row, column):
+            current = self._formats.get(cell)
+            if current is not None:
+                merged = {
+                    f.name: (
+                        getattr(format, f.name)
+                        if getattr(format, f.name) is not None
+                        else getattr(current, f.name)
+                    )
+                    for f in fields(CellFormat)
+                }
+                combined = CellFormat(**merged)
+            else:
+                combined = format
+            if combined.is_empty():
+                self._formats.pop(cell, None)
+            else:
+                self._formats[cell] = combined
+
+    def get_format(self, row: str, column: str) -> CellFormat | None:
+        """The format set on the cell at (*row* label, *column* header), or ``None``."""
+        self._row_index(row)
+        self._column_index(column)
+        return self._formats.get((row, column))
+
+    def clear_format(self, *, row: str | None = None, column: str | None = None) -> None:
+        """Remove cell formats — from one cell, a row, a column, or (with neither given) the
+        whole table. The table's own :class:`~pyhandlexl.TableStyle` is untouched."""
+        if row is None and column is None:
+            self._formats = {}
+            return
+        for cell in self._format_targets(row, column):
+            self._formats.pop(cell, None)
+
+    # --------------------------------------------------- column widths, row heights
+
+    def set_column_width(self, header: str, width: float) -> None:
+        """Give the column headed *header* a width of *width* characters (1 to 255).
+
+        Takes effect on the next :meth:`create` / :meth:`write`, and is stored with the table.
+        It belongs to the column, so it follows the column when it is renamed or when a
+        neighbouring table grows and shifts this one, and goes if the column is dropped. A
+        width set here is never changed by ``TableStyle.fit_text``. Only data columns have
+        one; the label column is sized by ``fit_text`` or by hand.
+        """
+        self._column_index(header)  # KeyError for an unknown header
+        self._col_widths[header] = dims.check_width(width)
+
+    def get_column_width(self, header: str) -> float | None:
+        """The width set for *header* with :meth:`set_column_width`, or ``None``."""
+        self._column_index(header)
+        return self._col_widths.get(header)
+
+    def clear_column_width(self, header: str | None = None) -> None:
+        """Remove the width set for *header* — or, with no argument, for every column."""
+        if header is None:
+            self._col_widths = {}
+            return
+        self._column_index(header)
+        self._col_widths.pop(header, None)
+
+    def set_row_height(self, label: str, height: float) -> None:
+        """Give the row labelled *label* a height of *height* points (up to 409).
+
+        Like :meth:`set_column_width`, stored with the table and following the row. A sheet row
+        has one height for the whole sheet, so it applies to every table beside this one on that
+        row; if two tables set different heights for the same sheet row, the one written last
+        wins. Rows with wrapped text grow to fit on their own, so a height is only needed to
+        override that.
+        """
+        self._row_index(label)
+        self._row_heights[label] = dims.check_height(height)
+
+    def get_row_height(self, label: str) -> float | None:
+        """The height set for *label* with :meth:`set_row_height`, or ``None``."""
+        self._row_index(label)
+        return self._row_heights.get(label)
+
+    def clear_row_height(self, label: str | None = None) -> None:
+        """Remove the height set for *label* — or, with no argument, for every row."""
+        if label is None:
+            self._row_heights = {}
+            return
+        self._row_index(label)
+        self._row_heights.pop(label, None)
 
     # --------------------------------------------------------------- display
 
@@ -1123,7 +1296,10 @@ class Table:
                 # Only what changes is cleared and repainted: with the style and the shape
                 # unchanged that is nothing, and a row or column added at the end touches
                 # only the old and the new last one. Values are always rewritten.
-                row_limit, col_limit = mt.stable_extent(entry, new_n_rows, new_n_cols, self._style)
+                new_formats = self._positional_formats()
+                row_limit, col_limit = mt.stable_extent(
+                    entry, new_n_rows, new_n_cols, self._style, new_formats
+                )
                 mt.clear_for_rewrite(
                     ws,
                     entry,
@@ -1142,9 +1318,13 @@ class Table:
                     style=self._style,
                     column_types=list(self._column_types),
                     modified_at=now,
+                    formats=new_formats,
+                    widths=self._positional_widths(),
+                    heights=self._positional_heights(),
                 )
-                entries[self._name] = updated_entry
                 mt.paint_table(ws, updated_entry, row_limit, col_limit)
+                updated_entry = mt.apply_dimensions(ws, entry, updated_entry, assembled)
+                entries[self._name] = updated_entry
                 mt.save_schema(workbook, entries)
                 atomic_save(workbook, path)
             except BaseException:
@@ -1217,9 +1397,13 @@ class Table:
                 list(self._column_types),
                 created_at=now,
                 modified_at=now,
+                formats=self._positional_formats(),
+                widths=self._positional_widths(),
+                heights=self._positional_heights(),
             )
-            entries[self._name] = entry
             mt.paint_table(ws, entry)
+            entry = mt.apply_dimensions(ws, None, entry, assembled)
+            entries[self._name] = entry
             mt.save_schema(workbook, entries)
             atomic_save(workbook, path)
         finally:

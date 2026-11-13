@@ -4,6 +4,7 @@ from pyhandlexl import grid
 from pyhandlexl._merge import MergeReport
 from pyhandlexl.column_type import ColumnType
 from pyhandlexl.core import (
+    Dimensions,
     Orientation,
     SheetKind,
     append_rows,
@@ -19,6 +20,7 @@ from pyhandlexl.core import (
     import_csv_to_xl,
     list_sheets,
     list_tables,
+    read_dimensions,
     read_sheet,
     rename_sheet,
     rename_workbook,
@@ -46,6 +48,7 @@ from pyhandlexl.errors import (
     TableExistsError,
     TableNotFoundError,
 )
+from pyhandlexl.format import CellFormat, Styled
 from pyhandlexl.style import TableStyle
 from pyhandlexl.table import Table, TableData, TableInfo
 from pyhandlexl.validate import (
@@ -55,13 +58,15 @@ from pyhandlexl.validate import (
     is_valid_xlsx,
 )
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 
 __all__ = [
+    "CellFormat",
     "CellTypeError",
     "ColumnType",
     "ColumnTypeError",
     "DimensionError",
+    "Dimensions",
     "FileLockedError",
     "FileReadOnlyError",
     "FormulaWarning",
@@ -77,6 +82,7 @@ __all__ = [
     "SheetKindError",
     "SheetNameError",
     "SheetNotFoundError",
+    "Styled",
     "Table",
     "TableData",
     "TableExistsError",
@@ -101,6 +107,7 @@ __all__ = [
     "is_valid_xlsx",
     "list_sheets",
     "list_tables",
+    "read_dimensions",
     "read_sheet",
     "rename_sheet",
     "rename_workbook",
